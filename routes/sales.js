@@ -8,8 +8,14 @@ const router = express.Router();
 //Get all sales
 router.get("/", requireAuth, async (req, res) => {
   try {
-    const { dateFrom, dateTo } = req.query;
+    const { dateFrom, dateTo, userId } = req.query;
     const where = {};
+
+    // Filter by userId if provided
+    if (userId) {
+      where.userId = userId;
+    }
+
     if (dateFrom || dateTo) {
       const tzOffsetMinutes = 8 * 60; // Asia/Manila (UTC+08:00)
       const isValidYmd = (dateStr) => /^\d{4}-\d{2}-\d{2}$/.test(dateStr);
@@ -90,13 +96,12 @@ router.get("/", requireAuth, async (req, res) => {
   }
 });
 
-router.post("/", requireAuth, async (req, res) => {
+router.post("/", async (req, res) => {
   try {
     const { userId, paymentMethod, items, tableId, referenceNo } = req.body;
 
     // Validate required fields
     if (
-      !userId ||
       !paymentMethod ||
       !items ||
       !Array.isArray(items) ||
@@ -104,25 +109,27 @@ router.post("/", requireAuth, async (req, res) => {
     ) {
       return res.status(400).json({
         success: false,
-        message: "userId, paymentMethod, and items array are required",
+        message: "paymentMethod and items array are required",
       });
     }
 
-    // Check if user exists
-    const user = await prisma.user.findUnique({
-      where: { id: userId },
-    });
-    if (!user) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid userId",
+    // Check if user exists only if userId is provided (guest orders allowed)
+    if (userId) {
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
       });
+      if (!user) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid userId",
+        });
+      }
     }
 
     // Validate table if provided
     if (tableId) {
       const table = await prisma.table.findUnique({
-        where: { id: tableId },
+        where: { id: String(tableId) },
       });
       if (!table) {
         return res.status(400).json({
@@ -199,7 +206,7 @@ router.post("/", requireAuth, async (req, res) => {
           userId,
           totalAmount,
           paymentMethod,
-          ...(tableId && { tableId }),
+          ...(tableId && { tableId: String(tableId) }),
           ...(referenceNo && { referenceNo: referenceNo.trim() }),
           saleItems: {
             create: saleItemsData,
@@ -250,4 +257,126 @@ router.post("/", requireAuth, async (req, res) => {
     });
   }
 });
+
+// Get orders by table number (public endpoint for guests)
+router.get("/by-table/:tableNumber", async (req, res) => {
+  try {
+    const { tableNumber } = req.params;
+
+    // Find the table first
+    const table = await prisma.table.findUnique({
+      where: { number: parseInt(tableNumber) },
+    });
+
+    if (!table) {
+      return res.status(404).json({
+        success: false,
+        message: "Table not found",
+      });
+    }
+
+    // Get sales for this table
+    const sales = await prisma.sale.findMany({
+      where: {
+        tableId: table.id,
+        // Only show recent orders (last 24 hours)
+        createdAt: {
+          gte: new Date(Date.now() - 24 * 60 * 60 * 1000),
+        },
+      },
+      include: {
+        saleItems: {
+          include: {
+            product: true,
+          },
+        },
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+        table: true,
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+    });
+
+    res.status(200).json({
+      success: true,
+      data: sales,
+    });
+  } catch (error) {
+    console.error("Error fetching sales by table:", error);
+    res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  }
+});
+
+// Update sale status (accept/decline/cancel)
+router.patch("/:id/status", requireAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+
+    // Validate status
+    const validStatuses = ["PENDING", "PREPARING", "COMPLETED", "CANCELLED"];
+    if (!status || !validStatuses.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid status. Must be one of: ${validStatuses.join(", ")}`,
+      });
+    }
+
+    // Check if sale exists
+    const existingSale = await prisma.sale.findUnique({
+      where: { id },
+    });
+
+    if (!existingSale) {
+      return res.status(404).json({
+        success: false,
+        message: "Sale not found",
+      });
+    }
+
+    // Update sale status
+    const updatedSale = await prisma.sale.update({
+      where: { id },
+      data: { status },
+      include: {
+        saleItems: {
+          include: {
+            product: true,
+          },
+        },
+        user: {
+          select: {
+            id: true,
+            name: true,
+            email: true,
+          },
+        },
+        table: true,
+      },
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Sale status updated to ${status}`,
+      data: updatedSale,
+    });
+  } catch (error) {
+    console.error("Error updating sale status:", error);
+    res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  }
+});
+
 export default router;

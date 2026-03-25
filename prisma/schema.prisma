@@ -65,15 +65,16 @@ model Product {
 // Sales (Paid orders)
 model Sale {
   id            String        @id @default(uuid())
-  userId        String
+  userId        String?
   totalAmount   Float
   paymentMethod PaymentMethod
   tableId       String?
   referenceNo   String?
+  status        OrderStatus   @default(PENDING)
   table         Table?        @relation(fields: [tableId], references: [id])
 
   saleItems     SaleItem[]
-  user          User          @relation(fields: [userId], references: [id])
+  user          User?         @relation(fields: [userId], references: [id])
 
   createdAt     DateTime      @default(now())
 }
@@ -102,10 +103,13 @@ model Table {
 
 // Orders (before payment)
 model Order {
-  id         String      @id @default(uuid())
-  userId     String?     
-  tableId    String?     
-  status     OrderStatus @default(PENDING)
+  id            String         @id @default(uuid())
+  orderNumber   Int            @unique @default(autoincrement())
+  userId        String?     
+  tableId       String?     
+  status        OrderStatus    @default(PENDING)
+  paymentMethod PaymentMethod?
+  referenceNo   String?
 
   orderItems OrderItem[]
   user       User?       @relation(fields: [userId], references: [id])

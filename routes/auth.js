@@ -184,25 +184,46 @@ router.delete("/users/:id", async (req, res) => {
 
 router.post("/create-user", async (req, res) => {
   try {
+    console.log("=== CREATE USER REQUEST ===");
+    console.log("Request body:", req.body);
+    console.log("Request headers:", req.headers);
+
     const { name, email, password, role = "CASHIER" } = req.body;
 
-    if (!name || !email || !password || !["ADMIN", "CASHIER"].includes(role)) {
+    // Validate required fields
+    if (!name || !email || !password) {
+      console.log("Validation failed: Missing required fields");
       return res.status(400).json({
         success: false,
-        message:
-          "Name, email, password, and valid role (ADMIN/CASHIER) are required",
+        message: "Name, email, and password are required",
       });
     }
 
+    // Validate role
+    if (!["ADMIN", "CASHIER"].includes(role)) {
+      console.log("Validation failed: Invalid role:", role);
+      return res.status(400).json({
+        success: false,
+        message: "Invalid role. Allowed roles: ADMIN, CASHIER",
+      });
+    }
+
+    // Check for existing user
+    console.log("Checking for existing user with email:", email);
     const existingUser = await prisma.user.findUnique({ where: { email } });
     if (existingUser) {
+      console.log("User already exists with email:", email);
       return res
         .status(400)
         .json({ success: false, message: "Email already exists" });
     }
 
+    // Hash password
+    console.log("Hashing password...");
     const hashedPassword = await bcrypt.hash(password, 12);
 
+    // Create user
+    console.log("Creating user with data:", { name, email, role });
     const user = await prisma.user.create({
       data: {
         name,
@@ -212,6 +233,8 @@ router.post("/create-user", async (req, res) => {
       },
     });
 
+    console.log("User created successfully:", user.id);
+
     const { password: _, ...userWithoutPassword } = user;
     res.status(201).json({
       success: true,
@@ -219,10 +242,15 @@ router.post("/create-user", async (req, res) => {
       user: userWithoutPassword,
     });
   } catch (error) {
-    console.error("Create user error:", error);
-    res.status(500).json({ success: false, message: "Internal server error" });
+    console.error("=== CREATE USER ERROR ===");
+    console.error("Error details:", error);
+    console.error("Error message:", error.message);
+    res.status(500).json({
+      success: false,
+      message: "Internal server error: " + error.message,
+    });
   }
 });
 
-// ✅ Export the router as default so server.js can import it
+//  Export the router as default so server.js can import it
 export default router;
