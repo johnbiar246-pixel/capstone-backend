@@ -1,0 +1,127 @@
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Enums
+enum Role {
+  ADMIN
+  CASHIER
+}
+
+enum PaymentMethod {
+  CASH
+  GCASH
+}
+
+enum OrderStatus {
+  PENDING
+  PREPARING
+  COMPLETED
+  CANCELLED
+}
+
+// Users (Cashiers/Admins)
+model User {
+  id        String   @id @default(uuid())
+  name      String
+  email     String   @unique
+  password  String
+  role      Role     @default(CASHIER)
+  isVerified Boolean? @default(true)
+  sales     Sale[]
+  orders    Order[]
+  createdAt DateTime @default(now())
+}
+
+// Product Categories
+model Category {
+  id        String    @id @default(uuid())
+  name      String    @unique
+  products  Product[]
+  createdAt DateTime  @default(now())
+}
+
+// Products / Inventory w picture
+model Product {
+  id          String     @id @default(uuid())
+  name        String
+  description String?
+  price       Float
+  stock       Int        @default(0)
+  imageUrl String?
+  categoryId  String
+  category    Category   @relation(fields: [categoryId], references: [id])
+  saleItems   SaleItem[]
+  orderItems  OrderItem[]
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+}
+
+// Sales (Paid orders)
+model Sale {
+  id            String        @id @default(uuid())
+  userId        String
+  totalAmount   Float
+  paymentMethod PaymentMethod
+  tableId       String?
+  referenceNo   String?
+  table         Table?        @relation(fields: [tableId], references: [id])
+
+  saleItems     SaleItem[]
+  user          User          @relation(fields: [userId], references: [id])
+
+  createdAt     DateTime      @default(now())
+}
+
+// Items inside a Sale
+model SaleItem {
+  id        String   @id @default(uuid())
+  saleId    String
+  productId String
+  quantity  Int
+  price     Float
+
+  sale      Sale     @relation(fields: [saleId], references: [id])
+  product   Product  @relation(fields: [productId], references: [id])
+}
+
+// Tables in the restaurant (for QR menu)
+model Table {
+  id        String   @id @default(uuid())
+  number    Int      @unique
+  qrValue   String   @unique      // QR code or URL value
+  orders    Order[]
+  sales     Sale[]
+  createdAt DateTime @default(now())
+}
+
+// Orders (before payment)
+model Order {
+  id         String      @id @default(uuid())
+  userId     String?     
+  tableId    String?     
+  status     OrderStatus @default(PENDING)
+
+  orderItems OrderItem[]
+  user       User?       @relation(fields: [userId], references: [id])
+  table      Table?      @relation(fields: [tableId], references: [id])
+
+  createdAt  DateTime    @default(now())
+}
+
+// Items inside an Order
+model OrderItem {
+  id        String   @id @default(uuid())
+  orderId   String
+  productId String
+  quantity  Int
+  price     Float
+
+  order     Order    @relation(fields: [orderId], references: [id])
+  product   Product  @relation(fields: [productId], references: [id])
+}
