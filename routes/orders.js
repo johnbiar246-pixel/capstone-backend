@@ -445,7 +445,12 @@ router.patch("/:id/status", requireAuth, async (req, res) => {
           });
         }
 
-        // Delete the order (or mark as completed)
+        // Delete order items first (to avoid foreign key constraint)
+        await tx.orderItem.deleteMany({
+          where: { orderId: id },
+        });
+
+        // Delete the order
         await tx.order.delete({
           where: { id },
         });
@@ -488,9 +493,12 @@ router.patch("/:id/status", requireAuth, async (req, res) => {
     });
   } catch (error) {
     console.error("Error updating order status:", error);
+    console.error("Error details:", error.message);
+    if (error.code) console.error("Error code:", error.code);
+    if (error.meta) console.error("Error meta:", error.meta);
     res.status(500).json({
       success: false,
-      message: "Internal server error",
+      message: "Internal server error: " + error.message,
     });
   }
 });
