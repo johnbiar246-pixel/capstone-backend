@@ -133,12 +133,35 @@ router.post("/", async (req, res) => {
     const { userId, items, tableId, status, paymentMethod, referenceNo } =
       req.body;
 
+    // Log incoming request for debugging
+    console.log("Creating order:", {
+      userId,
+      itemCount: items?.length,
+      tableId,
+      status,
+      paymentMethod,
+      hasReferenceNo: !!referenceNo,
+    });
+
     // Validate required fields
     if (!items || !Array.isArray(items) || items.length === 0) {
       return res.status(400).json({
         success: false,
         message: "Items array is required",
       });
+    }
+
+    // Validate user if provided
+    if (userId) {
+      const user = await prisma.user.findUnique({
+        where: { id: userId },
+      });
+      if (!user) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid userId - user not found",
+        });
+      }
     }
 
     // Validate table if provided
@@ -270,9 +293,21 @@ router.post("/", async (req, res) => {
     });
   } catch (error) {
     console.error("Error creating order:", error);
+    console.error("Error message:", error.message);
+    console.error("Error code:", error.code);
+    console.error("Error meta:", error.meta);
+    console.error("Request body:", req.body);
+    
+    // Return more detailed error in development, generic in production
+    const isDevelopment = process.env.NODE_ENV === 'development';
     res.status(500).json({
       success: false,
-      message: "Internal server error",
+      message: isDevelopment ? `Error: ${error.message}` : "Internal server error",
+      error: isDevelopment ? {
+        message: error.message,
+        code: error.code,
+        meta: error.meta,
+      } : undefined,
     });
   }
 });

@@ -17,6 +17,15 @@ router.post("/", requireAdmin, async (req, res) => {
   try {
     const { tableNumbers } = req.body;
 
+    // Enforce maximum 20 tables
+    const currentCount = await prisma.table.count();
+    if (currentCount >= 20) {
+      return res.status(400).json({
+        success: false,
+        message: "Maximum of 20 tables reached. Please delete some tables before creating new ones.",
+      });
+    }
+
     if (
       !tableNumbers ||
       !Array.isArray(tableNumbers) ||

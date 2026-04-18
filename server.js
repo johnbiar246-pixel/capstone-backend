@@ -28,6 +28,16 @@ app.use(cors(corsOptions));
 app.use(express.json());
 app.use(cookieParser());
 
+// Request logging middleware for debugging
+app.use((req, res, next) => {
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.path}`, {
+    body: req.method !== 'GET' ? req.body : undefined,
+    query: req.query,
+    ip: req.ip,
+  });
+  next();
+});
+
 // Routes
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/sales", salesRoutes);
@@ -44,6 +54,25 @@ app.get("/", async (req, res) => {
   } catch (err) {
     res.status(500).send("Server error: " + err.message);
   }
+});
+
+// Global error handler - must be last
+app.use((err, req, res, next) => {
+  console.error("Global error handler:", err);
+  console.error("Error stack:", err.stack);
+  console.error("Request path:", req.path);
+  console.error("Request method:", req.method);
+  console.error("Request body:", req.body);
+  
+  res.status(500).json({
+    success: false,
+    message: process.env.NODE_ENV === 'development' 
+      ? `Error: ${err.message}` 
+      : "Internal server error",
+    ...(process.env.NODE_ENV === 'development' && {
+      stack: err.stack,
+    }),
+  });
 });
 
 // Start server
