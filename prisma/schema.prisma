@@ -104,7 +104,7 @@ model Table {
 // Orders (before payment)
 model Order {
   id            String         @id @default(uuid())
-  orderNumber   Int            @unique @default(autoincrement())
+  orderNumber   Int            @unique
   userId        String?     
   tableId       String?     
   status        OrderStatus    @default(PENDING)

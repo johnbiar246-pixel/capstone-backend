@@ -7,9 +7,10 @@ const router = express.Router();
 
 // Helper function to generate next order number
 async function generateOrderNumber() {
+  // Use createdAt for sorting since orderNumber might not be recognized by Prisma client
   const lastOrder = await prisma.order.findFirst({
     orderBy: {
-      orderNumber: "desc",
+      createdAt: "desc",
     },
     select: {
       orderNumber: true,
