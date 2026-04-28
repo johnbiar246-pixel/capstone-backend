@@ -8,7 +8,7 @@ res.setHeader('Content-Disposition', `attachment; filename="Receipt-${receiptDat
   doc.pipe(res);
 
   // Store Header
-  doc.fontSize(24).font('Helvetica-Bold').text('CAPSYY POS', 72, 72, { align: 'center' });
+  doc.fontSize(24).font('Helvetica-Bold').text('Gulp Course POS', 72, 72, { align: 'center' });
   doc.fontSize(12).text('Restaurant & Bar', 72, 110, { align: 'center' });
 
   // Receipt Details
@@ -50,9 +50,17 @@ doc.fontSize(11).text(`Receipt #: ${receiptData.orderNumber || receiptData.order
   const formatCurrency = (amount) => `₱${Math.abs(amount).toFixed(2)}`;
   doc.fontSize(11)
     .text(`Subtotal:`, 72, y).text(formatCurrency(receiptData.subtotal), 440, y, { align: 'right', width: 140 });
-  y += 25;
-  doc.text(`Discount:`, 72, y).text(`-${formatCurrency(receiptData.discount)}`, 440, y, { align: 'right', width: 140 });
-  y += 25;
+  y += 20;
+  if (receiptData.foodSubtotal > 0 && receiptData.nonFoodSubtotal > 0) {
+    doc.text(`Food:`, 72, y).text(formatCurrency(receiptData.foodSubtotal), 440, y, { align: 'right', width: 140 });
+    y += 20;
+    doc.text(`Non-Food:`, 72, y).text(formatCurrency(receiptData.nonFoodSubtotal), 440, y, { align: 'right', width: 140 });
+    y += 20;
+  }
+  if (receiptData.discount > 0) {
+    doc.text(`Discount:`, 72, y).text(`-${formatCurrency(receiptData.discount)}`, 440, y, { align: 'right', width: 140 });
+    y += 25;
+  }
   doc.text(`Service Charge:`, 72, y).text(formatCurrency(receiptData.serviceCharge), 440, y, { align: 'right', width: 140 });
   y += 30;
 
@@ -73,7 +81,7 @@ doc.fontSize(11).text(`Receipt #: ${receiptData.orderNumber || receiptData.order
   doc.lineWidth(1).moveTo(72, y).lineTo(550, y).stroke();
   y += 20;
   doc.fontSize(9).text('Thank you for dining with us!', { align: 'center' })
-    .text('CAPSYY POS - v1.0', { align: 'center' });
+    .text('Gulp Course POS - v1.0', { align: 'center' });
 
   doc.end();
 }

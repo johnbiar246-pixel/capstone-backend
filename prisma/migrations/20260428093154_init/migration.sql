@@ -46,11 +46,6 @@ CREATE TABLE `Sale` (
     `tableId` VARCHAR(191) NULL,
     `referenceNo` VARCHAR(191) NULL,
     `status` ENUM('PENDING', 'PREPARING', 'COMPLETED', 'CANCELLED') NOT NULL DEFAULT 'PENDING',
-    `customerType` VARCHAR(191) NULL,
-    `subtotal` DOUBLE NOT NULL DEFAULT 0,
-    `discountAmount` DOUBLE NOT NULL DEFAULT 0,
-    `serviceCharge` DOUBLE NOT NULL DEFAULT 0,
-    `amountTendered` DOUBLE NULL,
     `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
 
     PRIMARY KEY (`id`)
@@ -89,10 +84,11 @@ CREATE TABLE `Order` (
     `paymentMethod` ENUM('CASH', 'GCASH') NULL,
     `referenceNo` VARCHAR(191) NULL,
     `customerType` VARCHAR(191) NULL,
-    `subtotal` DOUBLE NOT NULL DEFAULT 0,
-    `discountAmount` DOUBLE NOT NULL DEFAULT 0,
-    `serviceCharge` DOUBLE NOT NULL DEFAULT 0,
-    `amountTendered` DOUBLE NULL,
+    `foodSubtotal` DOUBLE NULL,
+    `nonFoodSubtotal` DOUBLE NULL,
+    `discount` DOUBLE NULL DEFAULT 0,
+    `serviceCharge` DOUBLE NULL DEFAULT 0,
+    `totalAmount` DOUBLE NULL,
     `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
 
     UNIQUE INDEX `Order_orderNumber_key`(`orderNumber`),

@@ -103,13 +103,19 @@ model Table {
 
 // Orders (before payment)
 model Order {
-  id            String         @id @default(uuid())
-  orderNumber   Int            @unique @default(autoincrement())
-  userId        String?     
-  tableId       String?     
-  status        OrderStatus    @default(PENDING)
-  paymentMethod PaymentMethod?
-  referenceNo   String?
+  id              String         @id @default(uuid())
+  orderNumber     Int            @unique @default(autoincrement())
+  userId          String?     
+  tableId         String?     
+  status          OrderStatus    @default(PENDING)
+  paymentMethod   PaymentMethod?
+  referenceNo     String?
+  customerType    String?        // PWD/SENIOR/REGULAR
+  foodSubtotal    Float?
+  nonFoodSubtotal Float?
+  discount        Float?         @default(0)
+  serviceCharge   Float?         @default(0)
+  totalAmount     Float?
 
   orderItems OrderItem[]
   user       User?       @relation(fields: [userId], references: [id])

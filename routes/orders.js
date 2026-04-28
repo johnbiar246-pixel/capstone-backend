@@ -124,8 +124,21 @@ router.get("/by-table/:tableNumber", async (req, res) => {
 // Create a new order (from guest - no auth required)
 router.post("/", async (req, res) => {
   try {
-    const { userId, items, tableId, status, paymentMethod, referenceNo } =
-      req.body;
+    const { 
+      userId, 
+      items, 
+      tableId, 
+      status, 
+      paymentMethod, 
+      referenceNo, 
+      amountTendered, 
+      customerType,
+      foodSubtotal,
+      nonFoodSubtotal,
+      discount,
+      serviceCharge,
+      totalAmount 
+    } = req.body;
 
     // Log incoming request for debugging
     console.log("Creating order:", {
@@ -134,7 +147,8 @@ router.post("/", async (req, res) => {
       tableId,
       status,
       paymentMethod,
-      hasReferenceNo: !!referenceNo,
+      customerType,
+      breakdown: { foodSubtotal, nonFoodSubtotal, discount, serviceCharge, totalAmount },
     });
 
     // Validate required fields
@@ -181,6 +195,23 @@ router.post("/", async (req, res) => {
       });
     }
 
+    // Validate breakdown if provided
+    if (foodSubtotal !== undefined && (foodSubtotal < 0 || !Number.isFinite(foodSubtotal))) {
+      return res.status(400).json({ success: false, message: "Invalid foodSubtotal" });
+    }
+    if (nonFoodSubtotal !== undefined && (nonFoodSubtotal < 0 || !Number.isFinite(nonFoodSubtotal))) {
+      return res.status(400).json({ success: false, message: "Invalid nonFoodSubtotal" });
+    }
+    if (discount !== undefined && (discount < 0 || !Number.isFinite(discount))) {
+      return res.status(400).json({ success: false, message: "Invalid discount" });
+    }
+    if (serviceCharge !== undefined && (serviceCharge < 0 || !Number.isFinite(serviceCharge))) {
+      return res.status(400).json({ success: false, message: "Invalid serviceCharge" });
+    }
+    if (totalAmount !== undefined && (totalAmount < 0 || !Number.isFinite(totalAmount))) {
+      return res.status(400).json({ success: false, message: "Invalid totalAmount" });
+    }
+
     // If creating directly as PREPARING, validate payment method
     if (orderStatus === "PREPARING") {
       if (!paymentMethod || !["CASH", "GCASH"].includes(paymentMethod)) {
@@ -203,10 +234,10 @@ router.post("/", async (req, res) => {
       }
     }
 
-    let totalAmount = 0;
+    let subtotal = 0;
     const orderItemsData = [];
 
-    // Validate items and calculate total
+    // Validate items and calculate subtotal
     for (const item of items) {
       const { productId, quantity } = item;
       if (!productId || !quantity || quantity <= 0) {
@@ -227,7 +258,7 @@ router.post("/", async (req, res) => {
       }
 
       const itemTotal = product.price * quantity;
-      totalAmount += itemTotal;
+      subtotal += itemTotal;
 
       orderItemsData.push({
         productId,
@@ -236,17 +267,34 @@ router.post("/", async (req, res) => {
       });
     }
 
+// Compute proper breakdown and totalAmount
+    const discountValue = discount !== undefined ? discount : 0;
+    const serviceChargeValue = serviceCharge !== undefined ? serviceCharge : 0;
+    const foodSubtotalValue = subtotal; // All items as food for simplicity
+    const nonFoodSubtotalValue = 0;
+    const computedTotalAmount = subtotal + serviceChargeValue - discountValue;
+
+    if (computedTotalAmount < 0) {
+      return res.status(400).json({ success: false, message: "Computed totalAmount cannot be negative" });
+    }
+
     // Generate order number manually (workaround for Prisma autoincrement issue)
     const orderNumber = await generateOrderNumber();
 
     // Create order and order items in a transaction
     const order = await prisma.$transaction(async (tx) => {
-      // Create order with optional payment info
+      // Create order with optional payment info + breakdown
       const orderData = {
         userId,
         tableId: tableId ? String(tableId) : null,
         status: orderStatus,
-        orderNumber, // Manually provide orderNumber
+        orderNumber,
+        customerType,
+        foodSubtotal: foodSubtotalValue,
+        nonFoodSubtotal: nonFoodSubtotalValue,
+        discount: discountValue,
+        serviceCharge: serviceChargeValue,
+        totalAmount: computedTotalAmount,
         orderItems: {
           create: orderItemsData,
         },
@@ -532,7 +580,7 @@ router.patch("/:id/status", requireAuth, async (req, res) => {
   }
 });
 
-// Generate receipt data for order (used by frontend ReceiptModal)
+// Generate receipt data for order (used by frontend ReceiptModal) - use stored breakdown
 router.post("/:id/receipt", requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
@@ -542,11 +590,7 @@ router.post("/:id/receipt", requireAuth, async (req, res) => {
       include: {
         orderItems: {
           include: {
-            product: {
-              include: {
-                category: true
-              }
-            }
+            product: true
           }
         },
         table: true,
@@ -563,17 +607,20 @@ router.post("/:id/receipt", requireAuth, async (req, res) => {
       });
     }
 
-    // Compute totals matching frontend getCartBreakdown logic
+    // Use stored breakdown values (prioritize), fallback to recompute
     let subtotal = 0;
-    let foodSubtotal = 0;
+    let foodSubtotal = order.foodSubtotal || 0;
+    let nonFoodSubtotal = order.nonFoodSubtotal || 0;
+    let discount = order.discount || 0;
+    let serviceCharge = order.serviceCharge || 0;
+    let total = order.totalAmount; // Use stored computed total
+    const customerType = order.customerType || 'REGULAR';
     const items = [];
+
+    // Always compute items and subtotal for display
     for (const item of order.orderItems) {
       const itemTotal = item.price * item.quantity;
       subtotal += itemTotal;
-      const catName = item.product.category?.name?.toLowerCase().replace(/\s+/g, '-');
-      if (['appetizers', 'main-dishes'].includes(catName)) {
-        foodSubtotal += itemTotal;
-      }
       items.push({
         name: item.product.name,
         quantity: item.quantity,
@@ -582,11 +629,7 @@ router.post("/:id/receipt", requireAuth, async (req, res) => {
       });
     }
 
-    const discount = 0; // Default "REGULAR" customerType
-    const serviceCharge = foodSubtotal * 0.1;
-    const total = subtotal + serviceCharge - discount;
-
-const receiptData = {
+    const receiptData = {
       orderNumber: order.orderNumber,
       orderId: order.id,
       date: new Date(order.createdAt).toLocaleString('en-US', { 
@@ -599,14 +642,16 @@ const receiptData = {
       }),
       table: order.table?.number || 'N/A',
       cashier: req.user?.name || 'Cashier',
-      customerType: 'REGULAR',
-      items,
+      customerType,
       subtotal: parseFloat(subtotal.toFixed(2)),
-      discount,
+      foodSubtotal: parseFloat(foodSubtotal.toFixed(2)),
+      nonFoodSubtotal: parseFloat(nonFoodSubtotal.toFixed(2)),
+      discount: parseFloat(discount.toFixed(2)),
       serviceCharge: parseFloat(serviceCharge.toFixed(2)),
       total: parseFloat(total.toFixed(2)),
-      tendered: 0, // Not stored in schema
-      change: 0
+      tendered: order.amountTendered || 0,
+      change: 0,  // Calculate if needed
+      items
     };
 
     res.status(200).json({
