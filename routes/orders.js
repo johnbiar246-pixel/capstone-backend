@@ -532,4 +532,94 @@ router.patch("/:id/status", requireAuth, async (req, res) => {
   }
 });
 
+// Generate receipt data for order (used by frontend ReceiptModal)
+router.post("/:id/receipt", requireAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const order = await prisma.order.findUnique({
+      where: { id },
+      include: {
+        orderItems: {
+          include: {
+            product: {
+              include: {
+                category: true
+              }
+            }
+          }
+        },
+        table: true,
+        user: {
+          select: { name: true }
+        }
+      }
+    });
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: "Order not found"
+      });
+    }
+
+    // Compute totals matching frontend getCartBreakdown logic
+    let subtotal = 0;
+    let foodSubtotal = 0;
+    const items = [];
+    for (const item of order.orderItems) {
+      const itemTotal = item.price * item.quantity;
+      subtotal += itemTotal;
+      const catName = item.product.category?.name?.toLowerCase().replace(/\s+/g, '-');
+      if (['appetizers', 'main-dishes'].includes(catName)) {
+        foodSubtotal += itemTotal;
+      }
+      items.push({
+        name: item.product.name,
+        quantity: item.quantity,
+        price: item.price,
+        total: itemTotal
+      });
+    }
+
+    const discount = 0; // Default "REGULAR" customerType
+    const serviceCharge = foodSubtotal * 0.1;
+    const total = subtotal + serviceCharge - discount;
+
+const receiptData = {
+      orderNumber: order.orderNumber,
+      orderId: order.id,
+      date: new Date(order.createdAt).toLocaleString('en-US', { 
+        timeZone: 'Asia/Manila',
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      }),
+      table: order.table?.number || 'N/A',
+      cashier: req.user?.name || 'Cashier',
+      customerType: 'REGULAR',
+      items,
+      subtotal: parseFloat(subtotal.toFixed(2)),
+      discount,
+      serviceCharge: parseFloat(serviceCharge.toFixed(2)),
+      total: parseFloat(total.toFixed(2)),
+      tendered: 0, // Not stored in schema
+      change: 0
+    };
+
+    res.status(200).json({
+      success: true,
+      data: receiptData
+    });
+  } catch (error) {
+    console.error("Receipt generation error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Failed to generate receipt data"
+    });
+  }
+});
+
 export default router;
