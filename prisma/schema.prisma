@@ -116,6 +116,8 @@ model Order {
   discount        Float?         @default(0)
   serviceCharge   Float?         @default(0)
   totalAmount     Float?
+  amountTendered Float?
+  change         Float?    @default(0)
 
   orderItems OrderItem[]
   user       User?       @relation(fields: [userId], references: [id])

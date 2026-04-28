@@ -274,6 +274,18 @@ router.post("/", async (req, res) => {
     const nonFoodSubtotalValue = 0;
     const computedTotalAmount = subtotal + serviceChargeValue - discountValue;
 
+    let changeValue = 0;
+    if (amountTendered !== undefined && orderStatus === "PREPARING") {
+      if (amountTendered < computedTotalAmount) {
+        return res.status(400).json({
+          success: false,
+          message: `Amount tendered (₱${amountTendered.toFixed(2)}) must be >= total (₱${computedTotalAmount.toFixed(2)})`
+        });
+      }
+      changeValue = parseFloat((amountTendered - computedTotalAmount).toFixed(2));
+      console.log(`Computed change: ₱${changeValue} for tendered ₱${amountTendered} - total ₱${computedTotalAmount}`);
+    }
+
     if (computedTotalAmount < 0) {
       return res.status(400).json({ success: false, message: "Computed totalAmount cannot be negative" });
     }
@@ -295,6 +307,8 @@ router.post("/", async (req, res) => {
         discount: discountValue,
         serviceCharge: serviceChargeValue,
         totalAmount: computedTotalAmount,
+        ...(amountTendered !== undefined && { amountTendered }),
+        ...(changeValue > 0 && { change: changeValue }),
         orderItems: {
           create: orderItemsData,
         },
@@ -358,7 +372,7 @@ router.post("/", async (req, res) => {
 router.patch("/:id/status", requireAuth, async (req, res) => {
   try {
     const { id } = req.params;
-    const { status, paymentMethod, referenceNo } = req.body;
+    const { status, paymentMethod, referenceNo, amountTendered } = req.body;
 
     // Validate status
     const validStatuses = ["PENDING", "PREPARING", "COMPLETED", "CANCELLED"];
@@ -411,12 +425,24 @@ router.patch("/:id/status", requireAuth, async (req, res) => {
       }
 
       // Update order with payment method
+      // Validate amountTendered
+      if (!amountTendered || amountTendered <= 0 || amountTendered < existingOrder.totalAmount) {
+        return res.status(400).json({
+          success: false,
+          message: `Amount tendered (₱${amountTendered?.toFixed(2) || 0}) must be >= total (₱${existingOrder.totalAmount?.toFixed(2) || 0})`,
+        });
+      }
+
+      const change = parseFloat((amountTendered - (existingOrder.totalAmount || 0)).toFixed(2));
+
       const updatedOrder = await prisma.order.update({
         where: { id },
         data: {
           status,
           paymentMethod,
           referenceNo: referenceNo ? referenceNo.trim() : null,
+          amountTendered,
+          change,
         },
         include: {
           orderItems: {
@@ -613,9 +639,11 @@ router.post("/:id/receipt", requireAuth, async (req, res) => {
     let nonFoodSubtotal = order.nonFoodSubtotal || 0;
     let discount = order.discount || 0;
     let serviceCharge = order.serviceCharge || 0;
-    let total = order.totalAmount; // Use stored computed total
+    let total = order.totalAmount || 0; // Use stored computed total
     const customerType = order.customerType || 'REGULAR';
     const items = [];
+    const tendered = order.amountTendered || 0;
+    const changeDue = order.change || 0;
 
     // Always compute items and subtotal for display
     for (const item of order.orderItems) {
@@ -649,8 +677,8 @@ router.post("/:id/receipt", requireAuth, async (req, res) => {
       discount: parseFloat(discount.toFixed(2)),
       serviceCharge: parseFloat(serviceCharge.toFixed(2)),
       total: parseFloat(total.toFixed(2)),
-      tendered: order.amountTendered || 0,
-      change: 0,  // Calculate if needed
+      tendered,
+      change: changeDue,
       items
     };
 

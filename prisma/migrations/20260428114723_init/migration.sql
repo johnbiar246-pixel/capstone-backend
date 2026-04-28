@@ -89,6 +89,8 @@ CREATE TABLE `Order` (
     `discount` DOUBLE NULL DEFAULT 0,
     `serviceCharge` DOUBLE NULL DEFAULT 0,
     `totalAmount` DOUBLE NULL,
+    `amountTendered` DOUBLE NULL,
+    `change` DOUBLE NULL DEFAULT 0,
     `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
 
     UNIQUE INDEX `Order_orderNumber_key`(`orderNumber`),
