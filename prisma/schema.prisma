@@ -1,24 +1,110 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
 datasource db {
   provider = "mysql"
   url      = env("DATABASE_URL")
 }
 
-generator client {
-  provider = "prisma-client-js"
+model category {
+  id        String   @id
+  name      String   @unique(map: "Category_name_key")
+  createdAt DateTime @default(now())
 }
 
-// Enums
-enum Role {
-  ADMIN
-  CASHIER
+model order {
+  id              String               @id
+  orderNumber     Int                  @unique(map: "Order_orderNumber_key") @default(autoincrement())
+  userId          String?
+  tableId         String?
+  status          order_status         @default(PENDING)
+  source          order_source         @default(CASHIER)
+  paymentMethod   order_paymentMethod?
+  referenceNo     String?
+  customerType    String?
+  foodSubtotal    Float?
+  nonFoodSubtotal Float?
+  discount        Float?               @default(0)
+  serviceCharge   Float?               @default(0)
+  totalAmount     Float?
+  amountTendered  Float?
+  change          Float?               @default(0)
+  createdAt       DateTime             @default(now())
+
+  @@index([tableId], map: "Order_tableId_fkey")
+  @@index([userId], map: "Order_userId_fkey")
 }
 
-enum PaymentMethod {
-  CASH
-  GCASH
+model orderitem {
+  id             String @id
+  orderId        String
+  productId      String
+  quantity       Int
+  price          Float
+  servedQuantity Int    @default(0)
+
+  @@index([orderId], map: "OrderItem_orderId_fkey")
+  @@index([productId], map: "OrderItem_productId_fkey")
 }
 
-enum OrderStatus {
+model product {
+  id          String   @id
+  name        String
+  description String?
+  price       Float
+  stock       Int      @default(0)
+  imageUrl    String?
+  categoryId  String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime
+
+  @@index([categoryId], map: "Product_categoryId_fkey")
+}
+
+model sale {
+  id            String              @id
+  orderId       String              @unique(map: "Sale_orderId_key")
+  userId        String?
+  tableId       String?
+  totalAmount   Float?
+  paymentMethod sale_paymentMethod?
+  referenceNo   String?
+  createdAt     DateTime            @default(now())
+
+  @@index([tableId], map: "Sale_tableId_fkey")
+  @@index([userId], map: "Sale_userId_fkey")
+}
+
+model saleitem {
+  id        String @id
+  saleId    String
+  productId String
+  quantity  Int
+  price     Float
+
+  @@index([productId], map: "SaleItem_productId_fkey")
+  @@index([saleId], map: "SaleItem_saleId_fkey")
+}
+
+model table {
+  id        String   @id
+  number    Int      @unique(map: "Table_number_key")
+  qrValue   String   @unique(map: "Table_qrValue_key")
+  createdAt DateTime @default(now())
+}
+
+model user {
+  id         String    @id
+  name       String
+  email      String    @unique(map: "User_email_key")
+  password   String
+  role       user_role @default(CASHIER)
+  isVerified Boolean?  @default(true)
+  createdAt  DateTime  @default(now())
+}
+
+enum order_status {
   PENDING
   PREPARING
   COMPLETED
@@ -26,119 +112,22 @@ enum OrderStatus {
   DECLINED
 }
 
-enum OrderSource {
+enum user_role {
+  ADMIN
+  CASHIER
+}
+
+enum sale_paymentMethod {
+  CASH
+  GCASH
+}
+
+enum order_source {
   CASHIER
   CUSTOMER
 }
 
-// Users (Cashiers/Admins)
-model User {
-  id         String   @id @default(uuid())
-  name       String
-  email      String   @unique
-  password   String
-  role       Role     @default(CASHIER)
-  isVerified Boolean? @default(true)
-  sales      Sale[]
-  orders     Order[]
-  createdAt  DateTime @default(now())
-}
-
-// Product Categories
-model Category {
-  id        String    @id @default(uuid())
-  name      String    @unique
-  products  Product[]
-  createdAt DateTime  @default(now())
-}
-
-// Products / Inventory
-model Product {
-  id          String     @id @default(uuid())
-  name        String
-  description String?
-  price       Float
-  stock       Int        @default(0)
-  imageUrl    String?
-  categoryId  String
-  category    Category   @relation(fields: [categoryId], references: [id])
-  saleItems   SaleItem[]
-  orderItems  OrderItem[]
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
-}
-
-// Tables in the restaurant
-model Table {
-  id        String   @id @default(uuid())
-  number    Int      @unique
-  qrValue   String   @unique
-  orders    Order[]
-  sales     Sale[]
-  createdAt DateTime @default(now())
-}
-
-// Orders (before payment)
-model Order {
-  id              String         @id @default(uuid())
-  orderNumber     Int            @unique @default(autoincrement())
-  userId          String?
-  tableId         String?
-  status          OrderStatus    @default(PENDING)
-  source          OrderSource    @default(CASHIER)
-  paymentMethod   PaymentMethod?
-  referenceNo     String?
-  customerType    String?        // PWD / SENIOR / REGULAR
-  foodSubtotal    Float?
-  nonFoodSubtotal Float?
-  discount        Float?         @default(0)
-  serviceCharge   Float?         @default(0)
-  totalAmount     Float?
-  amountTendered  Float?
-  change          Float?         @default(0)
-  orderItems      OrderItem[]
-  user            User?          @relation(fields: [userId], references: [id])
-  table           Table?         @relation(fields: [tableId], references: [id])
-  // One-to-one relation with Sale
-  sale            Sale?
-  createdAt       DateTime       @default(now())
-}
-
-// Items inside an Order
-model OrderItem {
-  id            String   @id @default(uuid())
-  orderId       String
-  productId     String
-  quantity      Int
-  price         Float
-  servedQuantity Int     @default(0)
-  order         Order    @relation(fields: [orderId], references: [id])
-  product       Product  @relation(fields: [productId], references: [id])
-}
-
-// Sales (AFTER payment)
-model Sale {
-  id            String        @id @default(uuid())
-  orderId       String        @unique
-  order         Order         @relation(fields: [orderId], references: [id])
-  userId        String?
-  tableId       String?
-  totalAmount   Float?
-  paymentMethod PaymentMethod?
-  referenceNo   String?
-  user          User?         @relation(fields: [userId], references: [id])
-  table         Table?        @relation(fields: [tableId], references: [id])
-  saleItems     SaleItem[]
-  createdAt     DateTime      @default(now())
-}
-
-// Items inside a Sale
-model SaleItem {
-  id        String   @id @default(uuid())
-  saleId    String
-  productId String
-  quantity  Int
-  price     Float
-  sale      Sale     @relation(fields: [saleId], references: [id])
-  product   Product  @relation(fields: [productId], references: [id])
+enum order_paymentMethod {
+  CASH
+  GCASH
 }
