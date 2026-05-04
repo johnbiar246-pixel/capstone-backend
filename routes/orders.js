@@ -30,14 +30,17 @@ router.post("/", async (req, res) => {
       });
     }
 
-    if (!paymentMethod || !["CASH", "GCASH"].includes(paymentMethod)) {
+    // Payment details only required for non-PENDING orders (cashier flow)
+    const requiresPayment = status.toUpperCase() !== "PENDING";
+
+    if (requiresPayment && (!paymentMethod || !["CASH", "GCASH"].includes(paymentMethod))) {
       return res.status(400).json({
         success: false,
         message: "Valid paymentMethod (CASH or GCASH) is required",
       });
     }
 
-    if (paymentMethod === "GCASH" && (!referenceNo || referenceNo.trim() === "")) {
+    if (requiresPayment && paymentMethod === "GCASH" && (!referenceNo || referenceNo.trim() === "")) {
       return res.status(400).json({
         success: false,
         message: "Reference number required for GCASH",
@@ -148,7 +151,7 @@ router.post("/", async (req, res) => {
           ...(userId && { user: { connect: { id: userId } } }),
           ...(tableId && { table: { connect: { id: String(tableId) } } }),
           status: status.toUpperCase(),
-          // source: source.toUpperCase(),
+          source: source.toUpperCase(),
           orderNumber,
           customerType,
           foodSubtotal: parseFloat(foodSubtotal.toFixed(2)),
@@ -158,8 +161,8 @@ router.post("/", async (req, res) => {
           totalAmount: parseFloat(totalAmount.toFixed(2)) || 0,
           amountTendered: amountTendered ? parseFloat(amountTendered) : null,
           change: change > 0 ? parseFloat(change.toFixed(2)) : 0,
-          paymentMethod,
-          referenceNo: paymentMethod === "GCASH" ? referenceNo.trim() : null,
+          ...(paymentMethod && { paymentMethod }),
+          ...(paymentMethod === "GCASH" && referenceNo ? { referenceNo: referenceNo.trim() } : {}),
           orderItems: {
             create: orderItemsData,
           },
@@ -171,26 +174,29 @@ router.post("/", async (req, res) => {
         },
       });
 
-      // 2. Create Sale + saleItems (linked via orderId)
-      const sale = await tx.sale.create({
-        data: {
-          orderId: order.id,
-          ...(userId && { userId }),
-          ...(tableId && { tableId  }),
-          totalAmount: parseFloat(totalAmount.toFixed(2)),
-          paymentMethod,
-          referenceNo: paymentMethod === "GCASH" ? referenceNo.trim() : null,
-          saleItems: {
-            create: saleItemsData,
+      // 2. Create Sale only for paid orders (non-PENDING)
+      let sale = null;
+      if (status.toUpperCase() !== "PENDING") {
+        sale = await tx.sale.create({
+          data: {
+            orderId: order.id,
+            ...(userId && { userId }),
+            ...(tableId && { tableId }),
+            totalAmount: parseFloat(totalAmount.toFixed(2)),
+            paymentMethod,
+            referenceNo: paymentMethod === "GCASH" ? referenceNo.trim() : null,
+            saleItems: {
+              create: saleItemsData,
+            },
           },
-        },
-        include: {
-          saleItems: { include: { product: true } },
-          user: { select: { id: true, name: true } },
-          table: true,
-          order: true,
-        },
-      });
+          include: {
+            saleItems: { include: { product: true } },
+            user: { select: { id: true, name: true } },
+            table: true,
+            order: true,
+          },
+        });
+      }
 
       return { order, sale };
     });
@@ -245,7 +251,7 @@ router.get("/", async (req, res) => {
       where: whereClause,
       include: {
         orderItems: {
-          include: { product: true }
+          include: { product: { include: { category: true } } }
         },
         table: true,
         user: {
@@ -275,7 +281,7 @@ router.get("/pending", async (req, res) => {
       },
       include: {
         orderItems: {
-          include: { product: true }
+          include: { product: { include: { category: true } } }
         },
         table: true,
         user: true,
@@ -311,7 +317,7 @@ router.get("/by-table/:tableNumber", async (req, res) => {
       where: { tableId: table.id },
       include: {
         orderItems: {
-          include: { product: true }
+          include: { product: { include: { category: true } } }
         },
         table: true,
         user: true,
@@ -369,16 +375,92 @@ router.patch("/:orderId/items/:itemId/serve", requireAuth, async (req, res) => {
  */
 router.patch("/:id/status", requireAuth, async (req, res) => {
   try {
-    const { status, paymentMethod, referenceNo, amountTendered = null } = req.body;
+    const { status, paymentMethod, referenceNo, amountTendered = null, customerType } = req.body;
+
+    // Fetch the existing order with items
+    const existingOrder = await prisma.order.findUnique({
+      where: { id: req.params.id },
+      include: {
+        orderItems: { include: { product: { include: { category: true } } } },
+        table: true,
+        sale: true,
+      }
+    });
+
+    if (!existingOrder) {
+      return res.status(404).json({ success: false, message: "Order not found" });
+    }
+
+    const isPendingAccept = existingOrder.status === "PENDING" && status === "PREPARING";
+
+    let updateData = { status };
+
+    if (isPendingAccept && paymentMethod) {
+      // Recalculate pricing with the (possibly updated) customerType
+      const finalCustomerType = customerType || existingOrder.customerType || "REGULAR";
+      let subtotal = 0;
+      let foodSubtotal = 0;
+
+      for (const item of existingOrder.orderItems) {
+        const itemTotal = item.price * item.quantity;
+        subtotal += itemTotal;
+        const catName = (item.product?.category?.name || "").toLowerCase();
+        if (["appetizers", "main-dishes"].includes(catName)) {
+          foodSubtotal += itemTotal;
+        }
+      }
+
+      const discountRate = ["PWD", "SENIOR"].includes(finalCustomerType) ? 0.2 : 0;
+      const discount = parseFloat((foodSubtotal * discountRate).toFixed(2));
+      const applicableAmount = subtotal - discount;
+      const serviceCharge = parseFloat((applicableAmount * 0.1).toFixed(2));
+      const totalAmount = parseFloat((applicableAmount + serviceCharge).toFixed(2));
+      const change = amountTendered ? parseFloat((amountTendered - totalAmount).toFixed(2)) : 0;
+
+      updateData = {
+        ...updateData,
+        customerType: finalCustomerType,
+        foodSubtotal: parseFloat(foodSubtotal.toFixed(2)),
+        nonFoodSubtotal: parseFloat((subtotal - foodSubtotal).toFixed(2)),
+        discount,
+        serviceCharge,
+        totalAmount,
+        amountTendered: amountTendered ? parseFloat(amountTendered) : null,
+        change: change > 0 ? change : 0,
+        paymentMethod,
+        ...(referenceNo && { referenceNo }),
+      };
+
+      // Create Sale if it doesn't exist yet
+      if (!existingOrder.sale) {
+        await prisma.sale.create({
+          data: {
+            orderId: existingOrder.id,
+            ...(existingOrder.userId && { userId: existingOrder.userId }),
+            ...(existingOrder.tableId && { tableId: existingOrder.tableId }),
+            totalAmount,
+            paymentMethod,
+            ...(referenceNo && { referenceNo }),
+            saleItems: {
+              create: existingOrder.orderItems.map(item => ({
+                productId: item.productId,
+                quantity: item.quantity,
+                price: item.price,
+              })),
+            },
+          },
+        });
+      }
+    } else {
+      // Non-accept updates (e.g., PREPARING -> COMPLETED, DECLINED)
+      if (paymentMethod) updateData.paymentMethod = paymentMethod;
+      if (referenceNo) updateData.referenceNo = referenceNo;
+      if (amountTendered) updateData.amountTendered = parseFloat(amountTendered);
+    }
 
     const order = await prisma.order.update({
       where: { id: req.params.id },
-      data: {
-        status,
-        ...(paymentMethod && { paymentMethod }),
-        ...(referenceNo && { referenceNo }),
-        ...(amountTendered && { amountTendered }),
-      },
+      data: updateData,
       include: {
         orderItems: { include: { product: true } },
         table: true,
@@ -394,7 +476,7 @@ router.patch("/:id/status", requireAuth, async (req, res) => {
     res.json({ success: true, data: order });
   } catch (error) {
     console.error('Order status update error:', error);
-    res.status(500).json({ success: false });
+    res.status(500).json({ success: false, message: error.message });
   }
 });
 
