@@ -5,153 +5,24 @@ import { requireAuth } from "../middleware/auth.js";
 const prisma = new PrismaClient();
 const router = express.Router();
 
-// Helper function to generate next order number
-async function generateOrderNumber() {
-  // Workaround: Count existing orders and add 1
-  // This avoids using orderNumber field which may not be recognized by Prisma client
-  const count = await prisma.order.count();
-  return count + 1;
-}
-
-// Get all orders (for staff)
-router.get("/", requireAuth, async (req, res) => {
-  try {
-    const { status, tableId } = req.query;
-    const where = {};
-
-    if (status) {
-      where.status = status;
-    }
-
-    if (tableId) {
-      where.tableId = tableId;
-    }
-
-    const orders = await prisma.order.findMany({
-      where,
-      include: {
-        orderItems: {
-          include: {
-            product: true,
-          },
-        },
-        user: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-          },
-        },
-        table: true,
-      },
-      orderBy: {
-        createdAt: "desc",
-      },
-    });
-
-    res.status(200).json({
-      success: true,
-      data: orders,
-    });
-  } catch (error) {
-    console.error("Error fetching orders:", error);
-    res.status(500).json({
-      success: false,
-      message: "Internal server error",
-    });
-  }
-});
-
-// Get orders by table number (public endpoint for guests)
-router.get("/by-table/:tableNumber", async (req, res) => {
-  try {
-    const { tableNumber } = req.params;
-
-    // Find the table first
-    const table = await prisma.table.findUnique({
-      where: { number: parseInt(tableNumber) },
-    });
-
-    if (!table) {
-      return res.status(404).json({
-        success: false,
-        message: "Table not found",
-      });
-    }
-
-    // Get orders for this table
-    const orders = await prisma.order.findMany({
-      where: {
-        tableId: table.id,
-        // Only show recent orders (last 24 hours)
-        createdAt: {
-          gte: new Date(Date.now() - 24 * 60 * 60 * 1000),
-        },
-      },
-      include: {
-        orderItems: {
-          include: {
-            product: true,
-          },
-        },
-        user: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-          },
-        },
-        table: true,
-      },
-      orderBy: {
-        createdAt: "desc",
-      },
-    });
-
-    res.status(200).json({
-      success: true,
-      data: orders,
-    });
-  } catch (error) {
-    console.error("Error fetching orders by table:", error);
-    res.status(500).json({
-      success: false,
-      message: "Internal server error",
-    });
-  }
-});
-
-// Create a new order (from guest - no auth required)
+/**
+ * CREATE ORDER (POST) - Unified checkout endpoint
+ */
 router.post("/", async (req, res) => {
   try {
-    const { 
-      userId, 
-      items, 
-      tableId, 
-      status, 
-      paymentMethod, 
-      referenceNo, 
-      amountTendered, 
-      customerType,
-      foodSubtotal,
-      nonFoodSubtotal,
-      discount,
-      serviceCharge,
-      totalAmount 
+    let {
+      userId,
+      items,
+      tableId,
+      paymentMethod,
+      referenceNo,
+      amountTendered,
+      customerType = "REGULAR",
+      status = "PENDING",
+      source = "CASHIER",
     } = req.body;
 
-    // Log incoming request for debugging
-    console.log("Creating order:", {
-      userId,
-      itemCount: items?.length,
-      tableId,
-      status,
-      paymentMethod,
-      customerType,
-      breakdown: { foodSubtotal, nonFoodSubtotal, discount, serviceCharge, totalAmount },
-    });
-
-    // Validate required fields
+    // Validation
     if (!items || !Array.isArray(items) || items.length === 0) {
       return res.status(400).json({
         success: false,
@@ -159,539 +30,432 @@ router.post("/", async (req, res) => {
       });
     }
 
-    // Validate user if provided
-    if (userId) {
-      const user = await prisma.user.findUnique({
-        where: { id: userId },
+    if (!paymentMethod || !["CASH", "GCASH"].includes(paymentMethod)) {
+      return res.status(400).json({
+        success: false,
+        message: "Valid paymentMethod (CASH or GCASH) is required",
       });
-      if (!user) {
-        return res.status(400).json({
-          success: false,
-          message: "Invalid userId - user not found",
-        });
-      }
     }
 
-    // Validate table if provided
-    if (tableId) {
-      const table = await prisma.table.findUnique({
-        where: { id: String(tableId) },
+    if (paymentMethod === "GCASH" && (!referenceNo || referenceNo.trim() === "")) {
+      return res.status(400).json({
+        success: false,
+        message: "Reference number required for GCASH",
       });
-      if (!table) {
-        return res.status(400).json({
-          success: false,
-          message: "Invalid tableId",
-        });
-      }
     }
 
-    // Validate status if provided (for POS direct to PREPARING)
-    const orderStatus = status || "PENDING";
-    const validStatuses = ["PENDING", "PREPARING", "COMPLETED", "CANCELLED"];
-    if (!validStatuses.includes(orderStatus)) {
+    // Validate status and source
+    const validStatuses = ["PENDING", "PREPARING", "COMPLETED", "CANCELLED", "DECLINED"];
+    const validSources = ["CASHIER", "CUSTOMER"];
+
+    if (!validStatuses.includes(status)) {
       return res.status(400).json({
         success: false,
         message: `Invalid status. Must be one of: ${validStatuses.join(", ")}`,
       });
     }
 
-    // Validate breakdown if provided
-    if (foodSubtotal !== undefined && (foodSubtotal < 0 || !Number.isFinite(foodSubtotal))) {
-      return res.status(400).json({ success: false, message: "Invalid foodSubtotal" });
-    }
-    if (nonFoodSubtotal !== undefined && (nonFoodSubtotal < 0 || !Number.isFinite(nonFoodSubtotal))) {
-      return res.status(400).json({ success: false, message: "Invalid nonFoodSubtotal" });
-    }
-    if (discount !== undefined && (discount < 0 || !Number.isFinite(discount))) {
-      return res.status(400).json({ success: false, message: "Invalid discount" });
-    }
-    if (serviceCharge !== undefined && (serviceCharge < 0 || !Number.isFinite(serviceCharge))) {
-      return res.status(400).json({ success: false, message: "Invalid serviceCharge" });
-    }
-    if (totalAmount !== undefined && (totalAmount < 0 || !Number.isFinite(totalAmount))) {
-      return res.status(400).json({ success: false, message: "Invalid totalAmount" });
-    }
-
-    // If creating directly as PREPARING, validate payment method
-    if (orderStatus === "PREPARING") {
-      if (!paymentMethod || !["CASH", "GCASH"].includes(paymentMethod)) {
-        return res.status(400).json({
-          success: false,
-          message:
-            "Valid paymentMethod (CASH or GCASH) is required for PREPARING orders",
-        });
-      }
-
-      // Validate referenceNo for GCASH
-      if (
-        paymentMethod === "GCASH" &&
-        (!referenceNo || referenceNo.trim() === "")
-      ) {
-        return res.status(400).json({
-          success: false,
-          message: "Reference number is required for GCASH payments",
-        });
-      }
-    }
-
-    let subtotal = 0;
-    const orderItemsData = [];
-
-    // Validate items and calculate subtotal
-    for (const item of items) {
-      const { productId, quantity } = item;
-      if (!productId || !quantity || quantity <= 0) {
-        return res.status(400).json({
-          success: false,
-          message: "Each item must have productId and positive quantity",
-        });
-      }
-
-      const product = await prisma.product.findUnique({
-        where: { id: productId },
-      });
-      if (!product) {
-        return res.status(400).json({
-          success: false,
-          message: `Product with id ${productId} not found`,
-        });
-      }
-
-      const itemTotal = product.price * quantity;
-      subtotal += itemTotal;
-
-      orderItemsData.push({
-        productId,
-        quantity,
-        price: product.price,
+    if (!validSources.includes(source)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid source. Must be one of: ${validSources.join(", ")}`,
       });
     }
 
-// Compute proper breakdown and totalAmount
-    const discountValue = discount !== undefined ? discount : 0;
-    const serviceChargeValue = serviceCharge !== undefined ? serviceCharge : 0;
-    const foodSubtotalValue = subtotal; // All items as food for simplicity
-    const nonFoodSubtotalValue = 0;
-    const computedTotalAmount = subtotal + serviceChargeValue - discountValue;
+    if (!userId) {
+      const user = await prisma.user.findFirst({
+        where: { role: "CASHIER" },
+      });
 
-    let changeValue = 0;
-    if (amountTendered !== undefined && orderStatus === "PREPARING") {
-      if (amountTendered < computedTotalAmount) {
+      if (!user) {
         return res.status(400).json({
           success: false,
-          message: `Amount tendered (₱${amountTendered.toFixed(2)}) must be >= total (₱${computedTotalAmount.toFixed(2)})`
+          message: "No cashier user found",
         });
       }
-      changeValue = parseFloat((amountTendered - computedTotalAmount).toFixed(2));
-      console.log(`Computed change: ₱${changeValue} for tendered ₱${amountTendered} - total ₱${computedTotalAmount}`);
+
+      userId = user.id;
     }
 
-    if (computedTotalAmount < 0) {
-      return res.status(400).json({ success: false, message: "Computed totalAmount cannot be negative" });
-    }
+    // Single atomic transaction
+    const result = await prisma.$transaction(async (tx) => {
+      let subtotal = 0;
+      let foodSubtotal = 0;
+      const orderItemsData = [];
+      const saleItemsData = [];
 
-    // Generate order number manually (workaround for Prisma autoincrement issue)
-    const orderNumber = await generateOrderNumber();
+      // Validate items + compute pricing
+      for (const item of items) {
+        const product = await tx.product.findUnique({
+          where: { id: item.productId },
+          include: { category: true },
+        });
 
-    // Create order and order items in a transaction
-    const order = await prisma.$transaction(async (tx) => {
-      // Create order with optional payment info + breakdown
-      const orderData = {
-        userId,
-        tableId: tableId ? String(tableId) : null,
-        status: orderStatus,
-        orderNumber,
-        customerType,
-        foodSubtotal: foodSubtotalValue,
-        nonFoodSubtotal: nonFoodSubtotalValue,
-        discount: discountValue,
-        serviceCharge: serviceChargeValue,
-        totalAmount: computedTotalAmount,
-        ...(amountTendered !== undefined && { amountTendered }),
-        ...(changeValue > 0 && { change: changeValue }),
-        orderItems: {
-          create: orderItemsData,
-        },
-      };
+        if (!product) {
+          throw new Error(`Product ${item.productId} not found`);
+        }
 
-      // Add payment info if creating as PREPARING
-      if (orderStatus === "PREPARING") {
-        orderData.paymentMethod = paymentMethod;
-        orderData.referenceNo = referenceNo ? referenceNo.trim() : null;
+        // validate stock
+        if (!['main-dishes', 'appetizers'].includes(product.category.id) && product.stock < item.quantity) {
+          throw new Error(`Insufficient stock for ${product.name}`);
+        }
+
+        const itemTotal = product.price * item.quantity;
+        subtotal += itemTotal;
+
+        // Food items get discount/service charge
+        const isFood = ['appetizers', 'main-dishes'].includes(
+          product.category?.name?.toLowerCase() || ''
+        );
+        if (isFood) foodSubtotal += itemTotal;
+
+        const orderItem = {
+          productId: item.productId,
+          quantity: item.quantity,
+          price: product.price,
+        };
+
+        orderItemsData.push(orderItem);
+        saleItemsData.push(orderItem);
+
+        // Pre-decrement stock (will rollback on failure)
+        await tx.product.update({
+          where: { id: item.productId },
+          data: { stock: { decrement: item.quantity } },
+        });
       }
 
-      const newOrder = await tx.order.create({
-        data: orderData,
-        include: {
+      // Pricing rules
+      const discountRate = customerType === "PWD" || customerType === "SENIOR" ? 0.2 : 0;
+      const discount = foodSubtotal * discountRate;
+      const applicableAmount = subtotal - discount;
+      const serviceCharge = applicableAmount * 0.1;
+      const totalAmount = applicableAmount + serviceCharge;
+
+      // Validate tendered amount
+      if (paymentMethod === "CASH" && amountTendered && amountTendered < totalAmount) {
+        throw new Error(`Amount tendered must be >= total: ₱${totalAmount.toFixed(2)}`);
+      }
+
+      const change = amountTendered ? parseFloat((amountTendered - totalAmount).toFixed(2)) : 0;
+
+      // Generate order number
+      const orderNumber = await prisma.order.count() + 1;
+
+      // 1. Create Order + orderItems
+      const order = await tx.order.create({
+        data: {
+          ...(userId && { user: { connect: { id: userId } } }),
+          ...(tableId && { table: { connect: { id: String(tableId) } } }),
+          status: status.toUpperCase(),
+          // source: source.toUpperCase(),
+          orderNumber,
+          customerType,
+          foodSubtotal: parseFloat(foodSubtotal.toFixed(2)),
+          nonFoodSubtotal: parseFloat((subtotal - foodSubtotal).toFixed(2)),
+          discount: parseFloat(discount.toFixed(2)),
+          serviceCharge: parseFloat(serviceCharge.toFixed(2)),
+          totalAmount: parseFloat(totalAmount.toFixed(2)) || 0,
+          amountTendered: amountTendered ? parseFloat(amountTendered) : null,
+          change: change > 0 ? parseFloat(change.toFixed(2)) : 0,
+          paymentMethod,
+          referenceNo: paymentMethod === "GCASH" ? referenceNo.trim() : null,
           orderItems: {
-            include: {
-              product: true,
-            },
+            create: orderItemsData,
           },
-          user: {
-            select: {
-              id: true,
-              name: true,
-              email: true,
-            },
-          },
+        },
+        include: {
+          orderItems: { include: { product: true } },
+          user: { select: { id: true, name: true } },
           table: true,
         },
       });
 
-      return newOrder;
+      // 2. Create Sale + saleItems (linked via orderId)
+      const sale = await tx.sale.create({
+        data: {
+          orderId: order.id,
+          ...(userId && { userId }),
+          ...(tableId && { tableId  }),
+          totalAmount: parseFloat(totalAmount.toFixed(2)),
+          paymentMethod,
+          referenceNo: paymentMethod === "GCASH" ? referenceNo.trim() : null,
+          saleItems: {
+            create: saleItemsData,
+          },
+        },
+        include: {
+          saleItems: { include: { product: true } },
+          user: { select: { id: true, name: true } },
+          table: true,
+          order: true,
+        },
+      });
+
+      return { order, sale };
     });
 
     res.status(201).json({
       success: true,
-      message: `Order created successfully with status: ${orderStatus}`,
-      data: order,
+      message: "Order created successfully",
+      data: {
+        order: result.order,
+        sale: result.sale,
+        paymentDetails: {
+          subtotal: parseFloat(result.order.foodSubtotal + result.order.nonFoodSubtotal).toFixed(2),
+          discount: result.order.discount.toFixed(2),
+          serviceCharge: result.order.serviceCharge.toFixed(2),
+          total: result.order.totalAmount.toFixed(2),
+          change: result.order.change.toFixed(2),
+        },
+      },
     });
   } catch (error) {
-    console.error("Error creating order:", error);
-    console.error("Error message:", error.message);
-    console.error("Error code:", error.code);
-    console.error("Error meta:", error.meta);
-    console.error("Request body:", req.body);
-    
-    // Return more detailed error in development, generic in production
-    const isDevelopment = process.env.NODE_ENV === 'development';
-    res.status(500).json({
+    console.error("Order creation error:", error);
+    res.status(400).json({
       success: false,
-      message: isDevelopment ? `Error: ${error.message}` : "Internal server error",
-      error: isDevelopment ? {
-        message: error.message,
-        code: error.code,
-        meta: error.meta,
-      } : undefined,
+      message: error.message || "Order creation failed",
     });
   }
 });
 
-// Update order status (accept/decline/cancel)
+/**
+ * GET ORDERS BY USER ID (QUERY PARAMETER)
+ */
+router.get("/", async (req, res) => {
+  try {
+    const { userId, status, source } = req.query;
+
+    // Build where clause dynamically
+    const whereClause = {};
+
+    if (userId) {
+      whereClause.userId = userId;
+    }
+
+    if (status) {
+      whereClause.status = status.toUpperCase();
+    }
+
+    if (source) {
+      whereClause.source = source.toUpperCase();
+    }
+
+    const orders = await prisma.order.findMany({
+      where: whereClause,
+      include: {
+        orderItems: {
+          include: { product: true }
+        },
+        table: true,
+        user: {
+          select: { id: true, name: true }
+        }
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    res.json({ success: true, data: orders });
+  } catch (error) {
+    console.error("Orders fetch error:", error);
+    res.status(500).json({ success: false, message: "Failed to fetch orders" });
+  }
+});
+
+/**
+ * GET PENDING ORDERS (FOR CASHIER VIEW - NO AUTH REQUIRED, ROUTE PROTECTED BY FRONTEND)
+ */
+router.get("/pending", async (req, res) => {
+  try {
+    const pendingOrders = await prisma.order.findMany({
+      where: { 
+        status: { 
+          in: ["PENDING", "PREPARING", "READY"] 
+        } 
+      },
+      include: {
+        orderItems: {
+          include: { product: true }
+        },
+        table: true,
+        user: true,
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    res.json({ success: true, data: pendingOrders });
+  } catch (error) {
+    console.error("Pending orders fetch error:", error);
+    res.status(500).json({ success: false, message: "Failed to fetch pending orders" });
+  }
+});
+
+/**
+ * GET ORDERS BY TABLE NUMBER (FOR GUEST USERS)
+ */
+router.get("/by-table/:tableNumber", async (req, res) => {
+  try {
+    const { tableNumber } = req.params;
+
+    // Find table by number first
+    const table = await prisma.table.findFirst({
+      where: { number: parseInt(tableNumber) }
+    });
+
+    if (!table) {
+      return res.status(404).json({ success: false, message: "Table not found" });
+    }
+
+    // Get orders for this table
+    const orders = await prisma.order.findMany({
+      where: { tableId: table.id },
+      include: {
+        orderItems: {
+          include: { product: true }
+        },
+        table: true,
+        user: true,
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    res.json({ success: true, data: orders });
+  } catch (error) {
+    console.error("Orders by table fetch error:", error);
+    res.status(500).json({ success: false, message: "Failed to load orders" });
+  }
+});
+
+/**
+ * SERVE ORDER ITEM - Mark as served/completed
+ */
+router.patch("/:orderId/items/:itemId/serve", requireAuth, async (req, res) => {
+  try {
+    const { orderId, itemId } = req.params;
+
+    // Get order item to validate
+    const orderItem = await prisma.orderItem.findUnique({
+      where: { id: itemId },
+    });
+
+    if (!orderItem) {
+      return res.status(404).json({ success: false, message: "Order item not found" });
+    }
+
+    // Mark as fully served (servedQuantity = quantity)
+    const updatedItem = await prisma.orderItem.update({
+      where: { id: itemId },
+      data: { 
+        servedQuantity: orderItem.quantity 
+      },
+      include: { product: true }
+    });
+
+    // Broadcast update
+    if (req.io) {
+      const broadcastOrdersUpdate = req.app.locals.broadcastOrdersUpdate || (() => {});
+      await broadcastOrdersUpdate();
+    }
+
+    res.json({ success: true, data: updatedItem });
+  } catch (error) {
+    console.error('Order item serve error:', error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+/**
+ * UPDATE ORDER STATUS ONLY
+ */
 router.patch("/:id/status", requireAuth, async (req, res) => {
   try {
-    const { id } = req.params;
-    const { status, paymentMethod, referenceNo, amountTendered } = req.body;
+    const { status, paymentMethod, referenceNo, amountTendered = null } = req.body;
 
-    // Validate status
-    const validStatuses = ["PENDING", "PREPARING", "COMPLETED", "CANCELLED"];
-    if (!status || !validStatuses.includes(status)) {
-      return res.status(400).json({
-        success: false,
-        message: `Invalid status. Must be one of: ${validStatuses.join(", ")}`,
-      });
-    }
-
-    // Check if order exists
-    const existingOrder = await prisma.order.findUnique({
-      where: { id },
-      include: {
-        orderItems: {
-          include: {
-            product: true,
-          },
-        },
+    const order = await prisma.order.update({
+      where: { id: req.params.id },
+      data: {
+        status,
+        ...(paymentMethod && { paymentMethod }),
+        ...(referenceNo && { referenceNo }),
+        ...(amountTendered && { amountTendered }),
       },
-    });
-
-    if (!existingOrder) {
-      return res.status(404).json({
-        success: false,
-        message: "Order not found",
-      });
-    }
-
-    // If marking as PREPARING, store payment method
-    if (status === "PREPARING") {
-      // Validate payment method
-      if (!paymentMethod || !["CASH", "GCASH"].includes(paymentMethod)) {
-        return res.status(400).json({
-          success: false,
-          message:
-            "Valid paymentMethod (CASH or GCASH) is required to accept order",
-        });
-      }
-
-      // Validate referenceNo for GCASH
-      if (
-        paymentMethod === "GCASH" &&
-        (!referenceNo || referenceNo.trim() === "")
-      ) {
-        return res.status(400).json({
-          success: false,
-          message: "Reference number is required for GCASH payments",
-        });
-      }
-
-      // Update order with payment method
-      // Validate amountTendered
-      if (!amountTendered || amountTendered <= 0 || amountTendered < existingOrder.totalAmount) {
-        return res.status(400).json({
-          success: false,
-          message: `Amount tendered (₱${amountTendered?.toFixed(2) || 0}) must be >= total (₱${existingOrder.totalAmount?.toFixed(2) || 0})`,
-        });
-      }
-
-      const change = parseFloat((amountTendered - (existingOrder.totalAmount || 0)).toFixed(2));
-
-      const updatedOrder = await prisma.order.update({
-        where: { id },
-        data: {
-          status,
-          paymentMethod,
-          referenceNo: referenceNo ? referenceNo.trim() : null,
-          amountTendered,
-          change,
-        },
-        include: {
-          orderItems: {
-            include: {
-              product: true,
-            },
-          },
-          user: {
-            select: {
-              id: true,
-              name: true,
-              email: true,
-            },
-          },
-          table: true,
-        },
-      });
-
-      return res.status(200).json({
-        success: true,
-        message: `Order accepted and status updated to ${status}`,
-        data: updatedOrder,
-      });
-    }
-
-    // If marking as COMPLETED, convert to Sale
-    if (status === "COMPLETED") {
-      // Use stored payment method or provided one
-      const finalPaymentMethod = existingOrder.paymentMethod || paymentMethod;
-      const finalReferenceNo = existingOrder.referenceNo || referenceNo;
-
-      // Validate payment method
-      if (
-        !finalPaymentMethod ||
-        !["CASH", "GCASH"].includes(finalPaymentMethod)
-      ) {
-        return res.status(400).json({
-          success: false,
-          message:
-            "Valid paymentMethod (CASH or GCASH) is required to complete order",
-        });
-      }
-
-      // Validate referenceNo for GCASH
-      if (
-        finalPaymentMethod === "GCASH" &&
-        (!finalReferenceNo || finalReferenceNo.trim() === "")
-      ) {
-        return res.status(400).json({
-          success: false,
-          message: "Reference number is required for GCASH payments",
-        });
-      }
-
-      // Create sale from order
-      const sale = await prisma.$transaction(async (tx) => {
-        // Create sale
-        const newSale = await tx.sale.create({
-          data: {
-            userId: existingOrder.userId,
-            totalAmount: existingOrder.orderItems.reduce(
-              (sum, item) => sum + item.price * item.quantity,
-              0,
-            ),
-            paymentMethod: finalPaymentMethod,
-            tableId: existingOrder.tableId,
-            referenceNo: finalReferenceNo ? finalReferenceNo.trim() : null,
-            status: "COMPLETED",
-            saleItems: {
-              create: existingOrder.orderItems.map((item) => ({
-                productId: item.productId,
-                quantity: item.quantity,
-                price: item.price,
-              })),
-            },
-          },
-          include: {
-            saleItems: {
-              include: {
-                product: true,
-              },
-            },
-            user: {
-              select: {
-                id: true,
-                name: true,
-                email: true,
-              },
-            },
-            table: true,
-          },
-        });
-
-        // Update product stock
-        for (const item of existingOrder.orderItems) {
-          await tx.product.update({
-            where: { id: item.productId },
-            data: {
-              stock: {
-                decrement: item.quantity,
-              },
-            },
-          });
-        }
-
-        // Delete order items first (to avoid foreign key constraint)
-        await tx.orderItem.deleteMany({
-          where: { orderId: id },
-        });
-
-        // Delete the order
-        await tx.order.delete({
-          where: { id },
-        });
-
-        return newSale;
-      });
-
-      return res.status(200).json({
-        success: true,
-        message: "Order completed and converted to sale",
-        data: sale,
-      });
-    }
-
-    // For other status updates (CANCELLED), just update the order
-    const updatedOrder = await prisma.order.update({
-      where: { id },
-      data: { status },
       include: {
-        orderItems: {
-          include: {
-            product: true,
-          },
-        },
-        user: {
-          select: {
-            id: true,
-            name: true,
-            email: true,
-          },
-        },
+        orderItems: { include: { product: true } },
         table: true,
-      },
+      }
     });
 
-    return res.status(200).json({
-      success: true,
-      message: `Order status updated to ${status}`,
-      data: updatedOrder,
-    });
+    // Broadcast update to all clients
+    if (req.io) {
+      const broadcastOrdersUpdate = req.app.locals.broadcastOrdersUpdate || (() => {});
+      await broadcastOrdersUpdate();
+    }
+
+    res.json({ success: true, data: order });
   } catch (error) {
-    console.error("Error updating order status:", error);
-    console.error("Error details:", error.message);
-    if (error.code) console.error("Error code:", error.code);
-    if (error.meta) console.error("Error meta:", error.meta);
-    res.status(500).json({
-      success: false,
-      message: "Internal server error: " + error.message,
-    });
+    console.error('Order status update error:', error);
+    res.status(500).json({ success: false });
   }
 });
 
-// Generate receipt data for order (used by frontend ReceiptModal) - use stored breakdown
-router.post("/:id/receipt", requireAuth, async (req, res) => {
+/**
+ * GET RECEIPT FOR ORDER
+ */
+router.get("/:id/receipt", requireAuth, async (req, res) => {
   try {
-    const { id } = req.params;
-
     const order = await prisma.order.findUnique({
-      where: { id },
+      where: { id: req.params.id },
       include: {
-        orderItems: {
-          include: {
-            product: true
-          }
-        },
+        orderItems: { include: { product: true } },
         table: true,
-        user: {
-          select: { name: true }
-        }
+        user: true,
       }
     });
 
     if (!order) {
-      return res.status(404).json({
-        success: false,
-        message: "Order not found"
-      });
+      return res.status(404).json({ success: false, message: "Order not found" });
     }
 
-    // Use stored breakdown values (prioritize), fallback to recompute
-    let subtotal = 0;
-    let foodSubtotal = order.foodSubtotal || 0;
-    let nonFoodSubtotal = order.nonFoodSubtotal || 0;
-    let discount = order.discount || 0;
-    let serviceCharge = order.serviceCharge || 0;
-    let total = order.totalAmount || 0; // Use stored computed total
-    const customerType = order.customerType || 'REGULAR';
-    const items = [];
-    const tendered = order.amountTendered || 0;
-    const changeDue = order.change || 0;
+    // Calculate totals
+    const subtotal = order.orderItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+    const discount = order.discount || 0;
+    const serviceCharge = order.serviceCharge || 0;
+    const total = subtotal - discount + serviceCharge;
 
-    // Always compute items and subtotal for display
-    for (const item of order.orderItems) {
-      const itemTotal = item.price * item.quantity;
-      subtotal += itemTotal;
-      items.push({
-        name: item.product.name,
-        quantity: item.quantity,
-        price: item.price,
-        total: itemTotal
-      });
-    }
-
+    // Format receipt data
     const receiptData = {
-      orderNumber: order.orderNumber,
       orderId: order.id,
-      date: new Date(order.createdAt).toLocaleString('en-US', { 
-        timeZone: 'Asia/Manila',
+      orderNumber: order.orderNumber,
+      date: new Date(order.createdAt).toLocaleDateString('en-US', {
         year: 'numeric',
-        month: 'short',
+        month: 'long',
         day: 'numeric',
         hour: '2-digit',
         minute: '2-digit'
       }),
       table: order.table?.number || 'N/A',
-      cashier: req.user?.name || 'Cashier',
-      customerType,
-      subtotal: parseFloat(subtotal.toFixed(2)),
-      foodSubtotal: parseFloat(foodSubtotal.toFixed(2)),
-      nonFoodSubtotal: parseFloat(nonFoodSubtotal.toFixed(2)),
-      discount: parseFloat(discount.toFixed(2)),
-      serviceCharge: parseFloat(serviceCharge.toFixed(2)),
-      total: parseFloat(total.toFixed(2)),
-      tendered,
-      change: changeDue,
-      items
+      customerType: order.customerType || 'Regular',
+      items: order.orderItems.map(item => ({
+        name: item.product?.name || 'Unknown Item',
+        quantity: item.quantity,
+        price: item.price,
+        total: item.price * item.quantity
+      })),
+      subtotal: subtotal,
+      discount: discount,
+      serviceCharge: serviceCharge,
+      total: total,
+      tendered: order.amountTendered || 0,
+      change: Math.max(0, (order.amountTendered || 0) - total),
+      cashier: order.user?.name || order.user?.email || 'System'
     };
 
-    res.status(200).json({
-      success: true,
-      data: receiptData
-    });
+    console.log('order:', order);
+
+    res.json({ success: true, data: receiptData });
   } catch (error) {
-    console.error("Receipt generation error:", error);
-    res.status(500).json({
-      success: false,
-      message: "Failed to generate receipt data"
-    });
+    console.error('Receipt generation error:', error);
+    res.status(500).json({ success: false, message: 'Failed to generate receipt' });
   }
 });
 
