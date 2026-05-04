@@ -1,24 +1,117 @@
-datasource db {
-  provider = "mysql"
-  url      = env("DATABASE_URL")
-}
-
 generator client {
   provider = "prisma-client-js"
 }
 
-// Enums
-enum Role {
-  ADMIN
-  CASHIER
+datasource db {
+  provider          = "mysql"
+  url               = env("DATABASE_URL")
+  shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
 }
 
-enum PaymentMethod {
-  CASH
-  GCASH
+model category {
+  id        String    @id @default(cuid())
+  name      String    @unique(map: "Category_name_key")
+  createdAt DateTime  @default(now())
+  products  product[]
 }
 
-enum OrderStatus {
+model order {
+  id              String               @id @default(cuid())
+  orderNumber     Int                  @unique(map: "Order_orderNumber_key") @default(autoincrement())
+  userId          String?
+  tableId         String?
+  status          order_status         @default(PENDING)
+  source          order_source         @default(CASHIER)
+  paymentMethod   order_paymentMethod?
+  referenceNo     String?
+  customerType    String?
+  foodSubtotal    Float?
+  nonFoodSubtotal Float?
+  discount        Float?               @default(0)
+  serviceCharge   Float?               @default(0)
+  totalAmount     Float?
+  amountTendered  Float?
+  change          Float?               @default(0)
+  createdAt       DateTime             @default(now())
+  user            user?                @relation(fields: [userId], references: [id])
+  table           table?               @relation(fields: [tableId], references: [id])
+  orderItems      orderitem[]
+  sale            sale?
+}
+
+model orderitem {
+  id             String  @id @default(cuid())
+  orderId        String
+  productId      String
+  quantity       Int
+  price          Float
+  servedQuantity Int     @default(0)
+  order          order   @relation(fields: [orderId], references: [id])
+  product        product @relation(fields: [productId], references: [id])
+}
+
+model product {
+  id          String      @id @default(cuid())
+  name        String
+  description String?
+  price       Float
+  stock       Int         @default(0)
+  imageUrl    String?
+  categoryId  String
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  category    category    @relation(fields: [categoryId], references: [id])
+  orderItems  orderitem[]
+  saleItems   saleitem[]
+}
+
+model sale {
+  id            String              @id @default(cuid())
+  orderId       String              @unique(map: "Sale_orderId_key")
+  userId        String?
+  tableId       String?
+  totalAmount   Float?
+  paymentMethod sale_paymentMethod?
+  referenceNo   String?
+  createdAt     DateTime            @default(now())
+  order         order               @relation(fields: [orderId], references: [id])
+  user          user?               @relation(fields: [userId], references: [id])
+  table         table?              @relation(fields: [tableId], references: [id])
+  saleItems     saleitem[]
+}
+
+model saleitem {
+  id        String  @id @default(cuid())
+  saleId    String
+  productId String
+  quantity  Int
+  price     Float
+  sale      sale    @relation(fields: [saleId], references: [id])
+  product   product @relation(fields: [productId], references: [id])
+}
+
+model table {
+  id        String   @id @default(cuid())
+  number    Int      @unique(map: "Table_number_key")
+  qrValue   String   @unique(map: "Table_qrValue_key")
+  createdAt DateTime @default(now())
+  orders    order[]
+  sales     sale[]
+}
+
+model user {
+  id         String    @id @default(cuid())
+  name       String
+  email      String    @unique(map: "User_email_key")
+  password   String
+  role       user_role @default(CASHIER)
+  isVerified Boolean?  @default(true)
+  createdAt  DateTime  @default(now())
+  orders     order[]
+  sales      sale[]
+}
+
+enum order_status {
   PENDING
   PREPARING
   COMPLETED
@@ -26,119 +119,22 @@ enum OrderStatus {
   DECLINED
 }
 
-enum OrderSource {
+enum user_role {
+  ADMIN
+  CASHIER
+}
+
+enum sale_paymentMethod {
+  CASH
+  GCASH
+}
+
+enum order_source {
   CASHIER
   CUSTOMER
 }
 
-// Users (Cashiers/Admins)
-model User {
-  id         String   @id @default(uuid())
-  name       String
-  email      String   @unique
-  password   String
-  role       Role     @default(CASHIER)
-  isVerified Boolean? @default(true)
-  sales      Sale[]
-  orders     Order[]
-  createdAt  DateTime @default(now())
-}
-
-// Product Categories
-model Category {
-  id        String    @id @default(uuid())
-  name      String    @unique
-  products  Product[]
-  createdAt DateTime  @default(now())
-}
-
-// Products / Inventory
-model Product {
-  id          String     @id @default(uuid())
-  name        String
-  description String?
-  price       Float
-  stock       Int        @default(0)
-  imageUrl    String?
-  categoryId  String
-  category    Category   @relation(fields: [categoryId], references: [id])
-  saleItems   SaleItem[]
-  orderItems  OrderItem[]
-  createdAt   DateTime   @default(now())
-  updatedAt   DateTime   @updatedAt
-}
-
-// Tables in the restaurant
-model Table {
-  id        String   @id @default(uuid())
-  number    Int      @unique
-  qrValue   String   @unique
-  orders    Order[]
-  sales     Sale[]
-  createdAt DateTime @default(now())
-}
-
-// Orders (before payment)
-model Order {
-  id              String         @id @default(uuid())
-  orderNumber     Int            @unique @default(autoincrement())
-  userId          String?
-  tableId         String?
-  status          OrderStatus    @default(PENDING)
-  source          OrderSource    @default(CASHIER)
-  paymentMethod   PaymentMethod?
-  referenceNo     String?
-  customerType    String?        // PWD / SENIOR / REGULAR
-  foodSubtotal    Float?
-  nonFoodSubtotal Float?
-  discount        Float?         @default(0)
-  serviceCharge   Float?         @default(0)
-  totalAmount     Float?
-  amountTendered  Float?
-  change          Float?         @default(0)
-  orderItems      OrderItem[]
-  user            User?          @relation(fields: [userId], references: [id])
-  table           Table?         @relation(fields: [tableId], references: [id])
-  // One-to-one relation with Sale
-  sale            Sale?
-  createdAt       DateTime       @default(now())
-}
-
-// Items inside an Order
-model OrderItem {
-  id            String   @id @default(uuid())
-  orderId       String
-  productId     String
-  quantity      Int
-  price         Float
-  servedQuantity Int     @default(0)
-  order         Order    @relation(fields: [orderId], references: [id])
-  product       Product  @relation(fields: [productId], references: [id])
-}
-
-// Sales (AFTER payment)
-model Sale {
-  id            String        @id @default(uuid())
-  orderId       String        @unique
-  order         Order         @relation(fields: [orderId], references: [id])
-  userId        String?
-  tableId       String?
-  totalAmount   Float?
-  paymentMethod PaymentMethod?
-  referenceNo   String?
-  user          User?         @relation(fields: [userId], references: [id])
-  table         Table?        @relation(fields: [tableId], references: [id])
-  saleItems     SaleItem[]
-  createdAt     DateTime      @default(now())
-}
-
-// Items inside a Sale
-model SaleItem {
-  id        String   @id @default(uuid())
-  saleId    String
-  productId String
-  quantity  Int
-  price     Float
-  sale      Sale     @relation(fields: [saleId], references: [id])
-  product   Product  @relation(fields: [productId], references: [id])
+enum order_paymentMethod {
+  CASH
+  GCASH
 }
