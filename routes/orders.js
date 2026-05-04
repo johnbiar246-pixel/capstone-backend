@@ -106,10 +106,8 @@ router.post("/", async (req, res) => {
         const itemTotal = product.price * item.quantity;
         subtotal += itemTotal;
 
-        // Food items get discount/service charge
-        const isFood = ['appetizers', 'main-dishes'].includes(
-          product.category?.name?.toLowerCase() || ''
-        );
+        // Food items get discount/service charge (use category.id which is already normalized)
+        const isFood = ['appetizers', 'main-dishes'].includes(product.category?.id || '');
         if (isFood) foodSubtotal += itemTotal;
 
         const orderItem = {
@@ -404,8 +402,9 @@ router.patch("/:id/status", requireAuth, async (req, res) => {
       for (const item of existingOrder.orderItems) {
         const itemTotal = item.price * item.quantity;
         subtotal += itemTotal;
-        const catName = (item.product?.category?.name || "").toLowerCase();
-        if (["appetizers", "main-dishes"].includes(catName)) {
+        // Use category.id (already normalized: 'main-dishes', 'appetizers')
+        const catId = item.product?.category?.id || item.product?.categoryId || '';
+        if (["appetizers", "main-dishes"].includes(catId)) {
           foodSubtotal += itemTotal;
         }
       }

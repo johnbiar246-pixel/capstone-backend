@@ -39,7 +39,12 @@ router.get("/", requireAuth, async (req, res) => {
       where,
       include: {
         saleItems: { include: { product: true } },
-        order: true,
+        order: {
+          include: {
+            table: true,
+            user: { select: { id: true, name: true } },
+          },
+        },
       },
       orderBy: { createdAt: "desc" },
     });
@@ -60,7 +65,12 @@ router.get("/:id", requireAuth, async (req, res) => {
       where: { id: req.params.id },
       include: {
         saleItems: { include: { product: true } },
-        order: true,
+        order: {
+          include: {
+            table: true,
+            user: { select: { id: true, name: true } },
+          },
+        },
       },
     });
 
