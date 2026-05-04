@@ -3,18 +3,20 @@ generator client {
 }
 
 datasource db {
-  provider = "mysql"
-  url      = env("DATABASE_URL")
+  provider          = "mysql"
+  url               = env("DATABASE_URL")
+  shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
 }
 
 model category {
-  id        String   @id
-  name      String   @unique(map: "Category_name_key")
-  createdAt DateTime @default(now())
+  id        String    @id @default(cuid())
+  name      String    @unique(map: "Category_name_key")
+  createdAt DateTime  @default(now())
+  products  product[]
 }
 
 model order {
-  id              String               @id
+  id              String               @id @default(cuid())
   orderNumber     Int                  @unique(map: "Order_orderNumber_key") @default(autoincrement())
   userId          String?
   tableId         String?
@@ -31,39 +33,40 @@ model order {
   amountTendered  Float?
   change          Float?               @default(0)
   createdAt       DateTime             @default(now())
-
-  @@index([tableId], map: "Order_tableId_fkey")
-  @@index([userId], map: "Order_userId_fkey")
+  user            user?                @relation(fields: [userId], references: [id])
+  table           table?               @relation(fields: [tableId], references: [id])
+  orderItems      orderitem[]
+  sale            sale?
 }
 
 model orderitem {
-  id             String @id
+  id             String  @id @default(cuid())
   orderId        String
   productId      String
   quantity       Int
   price          Float
-  servedQuantity Int    @default(0)
-
-  @@index([orderId], map: "OrderItem_orderId_fkey")
-  @@index([productId], map: "OrderItem_productId_fkey")
+  servedQuantity Int     @default(0)
+  order          order   @relation(fields: [orderId], references: [id])
+  product        product @relation(fields: [productId], references: [id])
 }
 
 model product {
-  id          String   @id
+  id          String      @id @default(cuid())
   name        String
   description String?
   price       Float
-  stock       Int      @default(0)
+  stock       Int         @default(0)
   imageUrl    String?
   categoryId  String
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime
-
-  @@index([categoryId], map: "Product_categoryId_fkey")
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+  category    category    @relation(fields: [categoryId], references: [id])
+  orderItems  orderitem[]
+  saleItems   saleitem[]
 }
 
 model sale {
-  id            String              @id
+  id            String              @id @default(cuid())
   orderId       String              @unique(map: "Sale_orderId_key")
   userId        String?
   tableId       String?
@@ -71,37 +74,41 @@ model sale {
   paymentMethod sale_paymentMethod?
   referenceNo   String?
   createdAt     DateTime            @default(now())
-
-  @@index([tableId], map: "Sale_tableId_fkey")
-  @@index([userId], map: "Sale_userId_fkey")
+  order         order               @relation(fields: [orderId], references: [id])
+  user          user?               @relation(fields: [userId], references: [id])
+  table         table?              @relation(fields: [tableId], references: [id])
+  saleItems     saleitem[]
 }
 
 model saleitem {
-  id        String @id
+  id        String  @id @default(cuid())
   saleId    String
   productId String
   quantity  Int
   price     Float
-
-  @@index([productId], map: "SaleItem_productId_fkey")
-  @@index([saleId], map: "SaleItem_saleId_fkey")
+  sale      sale    @relation(fields: [saleId], references: [id])
+  product   product @relation(fields: [productId], references: [id])
 }
 
 model table {
-  id        String   @id
+  id        String   @id @default(cuid())
   number    Int      @unique(map: "Table_number_key")
   qrValue   String   @unique(map: "Table_qrValue_key")
   createdAt DateTime @default(now())
+  orders    order[]
+  sales     sale[]
 }
 
 model user {
-  id         String    @id
+  id         String    @id @default(cuid())
   name       String
   email      String    @unique(map: "User_email_key")
   password   String
   role       user_role @default(CASHIER)
   isVerified Boolean?  @default(true)
   createdAt  DateTime  @default(now())
+  orders     order[]
+  sales      sale[]
 }
 
 enum order_status {

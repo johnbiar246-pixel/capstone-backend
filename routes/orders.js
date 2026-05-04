@@ -274,7 +274,7 @@ router.get("/pending", async (req, res) => {
     const pendingOrders = await prisma.order.findMany({
       where: { 
         status: { 
-          in: ["PENDING", "PREPARING", "READY"] 
+          in: ["PENDING", "PREPARING"] 
         } 
       },
       include: {
@@ -338,7 +338,7 @@ router.patch("/:orderId/items/:itemId/serve", requireAuth, async (req, res) => {
     const { orderId, itemId } = req.params;
 
     // Get order item to validate
-    const orderItem = await prisma.orderItem.findUnique({
+    const orderItem = await prisma.orderitem.findUnique({
       where: { id: itemId },
     });
 
@@ -347,7 +347,7 @@ router.patch("/:orderId/items/:itemId/serve", requireAuth, async (req, res) => {
     }
 
     // Mark as fully served (servedQuantity = quantity)
-    const updatedItem = await prisma.orderItem.update({
+    const updatedItem = await prisma.orderitem.update({
       where: { id: itemId },
       data: { 
         servedQuantity: orderItem.quantity 

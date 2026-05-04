@@ -39,14 +39,13 @@ router.get("/summary", requireAuth, async (req, res) => {
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
     // Sales items
-    const saleTopData = await prisma.saleItem.groupBy({
+    const saleTopData = await prisma.saleitem.groupBy({
       by: ["productId"],
       _sum: {
         quantity: true,
       },
       where: {
         sale: {
-          status: { not: "CANCELLED" },
           createdAt: {
             gte: thirtyDaysAgo,
           },
@@ -61,7 +60,7 @@ router.get("/summary", requireAuth, async (req, res) => {
     });
 
     // Preparing orders items
-    const orderTopData = await prisma.orderItem.groupBy({
+    const orderTopData = await prisma.orderitem.groupBy({
       by: ["productId"],
       _sum: {
         quantity: true,
@@ -255,10 +254,8 @@ router.get("/sales-chart", requireAuth, async (req, res) => {
 router.get("/sales-by-category", requireAuth, async (req, res) => {
   try {
     // Sales items + Order items for PREPARING orders
-    const saleItems = await prisma.saleItem.findMany({
-      where: {
-        sale: { status: { not: "CANCELLED" } }
-      },
+    const saleItems = await prisma.saleitem.findMany({
+      where: {},
       include: {
         product: {
           include: {
@@ -268,7 +265,7 @@ router.get("/sales-by-category", requireAuth, async (req, res) => {
       },
     });
 
-    const orderItems = await prisma.orderItem.findMany({
+    const orderItems = await prisma.orderitem.findMany({
       where: {
         order: { status: "PREPARING" }
       },
