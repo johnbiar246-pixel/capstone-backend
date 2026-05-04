@@ -23,19 +23,25 @@ enum OrderStatus {
   PREPARING
   COMPLETED
   CANCELLED
+  DECLINED
+}
+
+enum OrderSource {
+  CASHIER
+  CUSTOMER
 }
 
 // Users (Cashiers/Admins)
 model User {
-  id        String   @id @default(uuid())
-  name      String
-  email     String   @unique
-  password  String
-  role      Role     @default(CASHIER)
+  id         String   @id @default(uuid())
+  name       String
+  email      String   @unique
+  password   String
+  role       Role     @default(CASHIER)
   isVerified Boolean? @default(true)
-  sales     Sale[]
-  orders    Order[]
-  createdAt DateTime @default(now())
+  sales      Sale[]
+  orders     Order[]
+  createdAt  DateTime @default(now())
 }
 
 // Product Categories
@@ -46,14 +52,14 @@ model Category {
   createdAt DateTime  @default(now())
 }
 
-// Products / Inventory w picture
+// Products / Inventory
 model Product {
   id          String     @id @default(uuid())
   name        String
   description String?
   price       Float
   stock       Int        @default(0)
-  imageUrl String?
+  imageUrl    String?
   categoryId  String
   category    Category   @relation(fields: [categoryId], references: [id])
   saleItems   SaleItem[]
@@ -62,20 +68,67 @@ model Product {
   updatedAt   DateTime   @updatedAt
 }
 
-// Sales (Paid orders)
+// Tables in the restaurant
+model Table {
+  id        String   @id @default(uuid())
+  number    Int      @unique
+  qrValue   String   @unique
+  orders    Order[]
+  sales     Sale[]
+  createdAt DateTime @default(now())
+}
+
+// Orders (before payment)
+model Order {
+  id              String         @id @default(uuid())
+  orderNumber     Int            @unique @default(autoincrement())
+  userId          String?
+  tableId         String?
+  status          OrderStatus    @default(PENDING)
+  source          OrderSource    @default(CASHIER)
+  paymentMethod   PaymentMethod?
+  referenceNo     String?
+  customerType    String?        // PWD / SENIOR / REGULAR
+  foodSubtotal    Float?
+  nonFoodSubtotal Float?
+  discount        Float?         @default(0)
+  serviceCharge   Float?         @default(0)
+  totalAmount     Float?
+  amountTendered  Float?
+  change          Float?         @default(0)
+  orderItems      OrderItem[]
+  user            User?          @relation(fields: [userId], references: [id])
+  table           Table?         @relation(fields: [tableId], references: [id])
+  // One-to-one relation with Sale
+  sale            Sale?
+  createdAt       DateTime       @default(now())
+}
+
+// Items inside an Order
+model OrderItem {
+  id            String   @id @default(uuid())
+  orderId       String
+  productId     String
+  quantity      Int
+  price         Float
+  servedQuantity Int     @default(0)
+  order         Order    @relation(fields: [orderId], references: [id])
+  product       Product  @relation(fields: [productId], references: [id])
+}
+
+// Sales (AFTER payment)
 model Sale {
   id            String        @id @default(uuid())
+  orderId       String        @unique
+  order         Order         @relation(fields: [orderId], references: [id])
   userId        String?
-  totalAmount   Float
-  paymentMethod PaymentMethod
   tableId       String?
+  totalAmount   Float?
+  paymentMethod PaymentMethod?
   referenceNo   String?
-  status        OrderStatus   @default(PENDING)
-  table         Table?        @relation(fields: [tableId], references: [id])
-
-  saleItems     SaleItem[]
   user          User?         @relation(fields: [userId], references: [id])
-
+  table         Table?        @relation(fields: [tableId], references: [id])
+  saleItems     SaleItem[]
   createdAt     DateTime      @default(now())
 }
 
@@ -86,54 +139,6 @@ model SaleItem {
   productId String
   quantity  Int
   price     Float
-
   sale      Sale     @relation(fields: [saleId], references: [id])
-  product   Product  @relation(fields: [productId], references: [id])
-}
-
-// Tables in the restaurant (for QR menu)
-model Table {
-  id        String   @id @default(uuid())
-  number    Int      @unique
-  qrValue   String   @unique      // QR code or URL value
-  orders    Order[]
-  sales     Sale[]
-  createdAt DateTime @default(now())
-}
-
-// Orders (before payment)
-model Order {
-  id              String         @id @default(uuid())
-  orderNumber     Int            @unique @default(autoincrement())
-  userId          String?     
-  tableId         String?     
-  status          OrderStatus    @default(PENDING)
-  paymentMethod   PaymentMethod?
-  referenceNo     String?
-  customerType    String?        // PWD/SENIOR/REGULAR
-  foodSubtotal    Float?
-  nonFoodSubtotal Float?
-  discount        Float?         @default(0)
-  serviceCharge   Float?         @default(0)
-  totalAmount     Float?
-  amountTendered Float?
-  change         Float?    @default(0)
-
-  orderItems OrderItem[]
-  user       User?       @relation(fields: [userId], references: [id])
-  table      Table?      @relation(fields: [tableId], references: [id])
-
-  createdAt  DateTime    @default(now())
-}
-
-// Items inside an Order
-model OrderItem {
-  id        String   @id @default(uuid())
-  orderId   String
-  productId String
-  quantity  Int
-  price     Float
-
-  order     Order    @relation(fields: [orderId], references: [id])
   product   Product  @relation(fields: [productId], references: [id])
 }

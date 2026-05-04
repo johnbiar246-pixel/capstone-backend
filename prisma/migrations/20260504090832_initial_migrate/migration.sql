@@ -1,0 +1,7 @@
+-- AlterTable
+ALTER TABLE `order` MODIFY `status` ENUM('PENDING', 'PREPARING', 'COMPLETED', 'CANCELLED', 'DECLINED') NOT NULL DEFAULT 'PENDING';
+
+-- AlterTable
+ALTER TABLE `sale` ADD COLUMN `paymentMethod` ENUM('CASH', 'GCASH') NULL,
+    ADD COLUMN `referenceNo` VARCHAR(191) NULL,
+    ADD COLUMN `totalAmount` DOUBLE NULL;

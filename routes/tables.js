@@ -101,18 +101,25 @@ router.get("/", requireAuth, async (req, res) => {
   }
 });
 
-// GET /tables/:number - Get table by number
+// GET /tables/:number - Get table by number (public for QR validation)
 router.get("/:number", async (req, res) => {
+  let tableNumber = null;
+  let tableNumberStr = null;
+  
   try {
     const { number } = req.params;
-    const tableNumber = parseInt(number);
-
-    if (isNaN(tableNumber)) {
+    
+    // Robust parsing: extract digits before first non-digit (handles "1:1", "table1", etc.)
+    const tableNumberMatch = number.match(/^(\d+)/);
+    if (!tableNumberMatch) {
       return res.status(400).json({
         success: false,
-        message: "Invalid table number",
+        message: "Invalid table number format",
       });
     }
+    
+    tableNumberStr = tableNumberMatch[1];
+    tableNumber = parseInt(tableNumberStr);
 
     const table = await prisma.table.findUnique({
       where: { number: tableNumber },
@@ -121,8 +128,17 @@ router.get("/:number", async (req, res) => {
           where: { status: "PENDING" },
           include: {
             orderItems: {
-              include: {
-                product: true,
+              select: {  // Safer: select specific fields, avoid full relation
+                id: true,
+                quantity: true,
+                price: true,
+                product: {
+                  select: {
+                    id: true,
+                    name: true,
+                    price: true,
+                  },
+                },
               },
             },
           },
@@ -133,7 +149,7 @@ router.get("/:number", async (req, res) => {
     if (!table) {
       return res.status(404).json({
         success: false,
-        message: "Table not found",
+        message: `Table ${tableNumber} not found`,
       });
     }
 
@@ -142,10 +158,40 @@ router.get("/:number", async (req, res) => {
       data: table,
     });
   } catch (error) {
-    console.error("Error fetching table:", error);
+    console.error(`Error fetching table ${req.params.number}:`, {
+      rawNumber: req.params.number,
+      parsedNumber: tableNumberStr,
+      tableNumber,
+      error: error.message,
+      code: error.code,
+      stack: error.stack?.split('\n').slice(0, 5).join('\n'),
+    });
+    
+    // Fallback: return basic table info without relations
+    if (tableNumber) {
+      try {
+        const safeTable = await prisma.table.findUnique({
+          where: { number: tableNumber },
+        });
+        if (safeTable) {
+          return res.status(200).json({
+            success: true,
+            data: { 
+              ...safeTable, 
+              orders: [], 
+              _warnings: ['Partial data: some orders may have missing products'] 
+            },
+          });
+        }
+      } catch (safeError) {
+        console.error("Safe table query failed:", safeError.message);
+      }
+    }
+    
     res.status(500).json({
       success: false,
-      message: "Internal server error",
+      message: "Unable to fetch table details",
+      error: process.env.NODE_ENV === 'development' ? error.message : undefined,
     });
   }
 });

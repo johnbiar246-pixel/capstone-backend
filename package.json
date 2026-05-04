@@ -5,9 +5,12 @@
   "description": "",
   "main": "server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "node --experimental-vm-modules node_modules/jest/bin/jest.js",
     "start": "node server.js",
-    "build": "prisma generate"
+    "dev" : "nodemon server.js",
+    "db:migrate": "prisma migrate dev",
+    "build": "prisma generate",
+    "test:watch": "node --experimental-vm-modules node_modules/jest/bin/jest.js --watch"
   },
   "keywords": [],
   "author": "",
@@ -23,9 +26,12 @@
     "express": "^5.2.1",
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.1.1",
-    "mysql2": "^3.17.0"
+    "mysql2": "^3.17.0",
+    "socket.io": "^4.8.3"
   },
   "devDependencies": {
-    "prisma": "^6.19.2"
+    "jest": "^29.7.0",
+    "prisma": "^6.19.2",
+    "supertest": "^7.0.0"
   }
 }
